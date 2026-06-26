@@ -1,0 +1,36 @@
+{
+  "name": "nexusdevai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NexusDev AI - AI-Native Developer Engineering Platform",
+  "packageManager": "npm@10.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "db:psql": "docker exec -it nexusdev-postgres psql -U postgres -d nexusdev",
+    "redis:cli": "docker exec -it nexusdev-redis redis-cli"
+  },
+  "keywords": [
+    "ai",
+    "developer-platform",
+    "rag",
+    "code-intelligence",
+    "devtools"
+  ],
+  "author": "Rajni Saini",
+  "license": "MIT",
+  "devDependencies": {
+    "turbo": "^2.10.0",
+    "prettier": "^3.3.3"
+  }
+}
