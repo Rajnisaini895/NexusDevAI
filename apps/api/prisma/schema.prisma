@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  DEVELOPER
+  VIEWER
+}
+
+model User {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  passwordHash String
+  fullName     String?
+  status       UserStatus   @default(ACTIVE)
+
+  memberships  Membership[]
+  sessions     Session[]
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  deletedAt    DateTime?
+}
+
+model Organization {
+  id          String       @id @default(uuid())
+  name        String
+  slug        String       @unique
+
+  workspaces  Workspace[]
+  memberships Membership[]
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deletedAt   DateTime?
+}
+
+model Workspace {
+  id             String       @id @default(uuid())
+  name           String
+  slug           String
+  organizationId String
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+model Membership {
+  id             String       @id @default(uuid())
+  userId         String
+  organizationId String
+  role           MemberRole   @default(DEVELOPER)
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  userId       String
+  refreshToken String    @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([userId])
+}
