@@ -7,7 +7,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
-
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { LoginDto } from './dto/login.dto';
@@ -26,6 +26,10 @@ export class AuthController {
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
   }
+  @Post('refresh')
+refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
+  return this.authService.refreshToken(refreshTokenDto);
+}
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)

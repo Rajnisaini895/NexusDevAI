@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
@@ -72,23 +73,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Generate Access Token
     const accessToken = await this.jwtService.signAsync({
       sub: user.id,
       email: user.email,
     });
 
-    // Generate Refresh Token
     const refreshToken = randomUUID();
-
-    // Hash Refresh Token before storing
     const refreshTokenHash = await bcrypt.hash(refreshToken, 12);
 
-    // Refresh Token expires in 7 days
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    // Store Session
     await this.prisma.session.create({
       data: {
         userId: user.id,
@@ -109,5 +104,40 @@ export class AuthService {
         createdAt: user.createdAt,
       },
     };
+  }
+
+  async refreshToken(refreshTokenDto: RefreshTokenDto) {
+    const sessions = await this.prisma.session.findMany({
+      where: {
+        revokedAt: null,
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+      include: {
+        user: true,
+      },
+    });
+
+    for (const session of sessions) {
+      const isMatch = await bcrypt.compare(
+        refreshTokenDto.refreshToken,
+        session.refreshTokenHash,
+      );
+
+      if (isMatch) {
+        const accessToken = await this.jwtService.signAsync({
+          sub: session.user.id,
+          email: session.user.email,
+        });
+
+        return {
+          message: 'Token refreshed successfully',
+          accessToken,
+        };
+      }
+    }
+
+    throw new UnauthorizedException('Invalid or expired refresh token');
   }
 }
