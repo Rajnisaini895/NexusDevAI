@@ -1,17 +1,11 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Post,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
-import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthService } from './auth.service';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { LoginDto } from './dto/login.dto';
+import { LogoutDto } from './dto/logout.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -26,10 +20,16 @@ export class AuthController {
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
   }
+
   @Post('refresh')
-refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
-  return this.authService.refreshToken(refreshTokenDto);
-}
+  refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
+    return this.authService.refreshToken(refreshTokenDto);
+  }
+
+  @Post('logout')
+  logout(@Body() logoutDto: LogoutDto) {
+    return this.authService.logout(logoutDto);
+  }
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)

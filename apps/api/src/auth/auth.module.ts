@@ -8,7 +8,6 @@ import { AuthService } from './auth.service';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
-
 @Module({
   imports: [
     PrismaModule,
@@ -17,10 +16,12 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         const expiresIn =
-          configService.get<SignOptions['expiresIn']>('JWT_EXPIRES_IN') ?? '15m';
+          configService.get<SignOptions['expiresIn']>('JWT_EXPIRES_IN') ??
+          '15m';
 
         return {
-          secret: configService.get<string>('JWT_SECRET') ?? 'change_this_later',
+          secret:
+            configService.get<string>('JWT_SECRET') ?? 'change_this_later',
           signOptions: {
             expiresIn,
           },

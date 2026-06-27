@@ -5,12 +5,15 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { randomUUID } from 'crypto';
+import { randomBytes } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
+
+const REFRESH_TOKEN_TTL_DAYS = 7;
 
 @Injectable()
 export class AuthService {
@@ -60,7 +63,7 @@ export class AuthService {
       where: { email },
     });
 
-    if (!user) {
+    if (!user || user.status !== 'ACTIVE' || user.deletedAt !== null) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -73,29 +76,24 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const accessToken = await this.jwtService.signAsync({
-      sub: user.id,
-      email: user.email,
-    });
+    const refreshTokenSecret = this.createRefreshTokenSecret();
+    const refreshTokenHash = await bcrypt.hash(refreshTokenSecret, 12);
 
-    const refreshToken = randomUUID();
-    const refreshTokenHash = await bcrypt.hash(refreshToken, 12);
-
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-
-    await this.prisma.session.create({
+    const session = await this.prisma.session.create({
       data: {
         userId: user.id,
         refreshTokenHash,
-        expiresAt,
+        expiresAt: this.createRefreshTokenExpiry(),
       },
+      select: { id: true },
     });
+
+    const accessToken = await this.createAccessToken(user.id, user.email);
 
     return {
       message: 'Login successful',
       accessToken,
-      refreshToken,
+      refreshToken: this.formatRefreshToken(session.id, refreshTokenSecret),
       user: {
         id: user.id,
         email: user.email,
@@ -107,37 +105,144 @@ export class AuthService {
   }
 
   async refreshToken(refreshTokenDto: RefreshTokenDto) {
-    const sessions = await this.prisma.session.findMany({
-      where: {
-        revokedAt: null,
-        expiresAt: {
-          gt: new Date(),
-        },
-      },
+    const { sessionId, secret } = this.parseRefreshToken(
+      refreshTokenDto.refreshToken,
+    );
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
       include: {
         user: true,
       },
     });
 
-    for (const session of sessions) {
-      const isMatch = await bcrypt.compare(
-        refreshTokenDto.refreshToken,
-        session.refreshTokenHash,
-      );
-
-      if (isMatch) {
-        const accessToken = await this.jwtService.signAsync({
-          sub: session.user.id,
-          email: session.user.email,
-        });
-
-        return {
-          message: 'Token refreshed successfully',
-          accessToken,
-        };
-      }
+    if (!session) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    throw new UnauthorizedException('Invalid or expired refresh token');
+    const isMatch = await bcrypt.compare(secret, session.refreshTokenHash);
+
+    if (!isMatch) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (session.revokedAt) {
+      await this.prisma.session.updateMany({
+        where: {
+          userId: session.userId,
+          revokedAt: null,
+        },
+        data: { revokedAt: new Date() },
+      });
+
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (
+      session.expiresAt <= new Date() ||
+      session.user.status !== 'ACTIVE' ||
+      session.user.deletedAt !== null
+    ) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    const nextSecret = this.createRefreshTokenSecret();
+    const nextSecretHash = await bcrypt.hash(nextSecret, 12);
+
+    const rotation = await this.prisma.session.updateMany({
+      where: {
+        id: session.id,
+        refreshTokenHash: session.refreshTokenHash,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: {
+        refreshTokenHash: nextSecretHash,
+        expiresAt: this.createRefreshTokenExpiry(),
+      },
+    });
+
+    if (rotation.count !== 1) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    const accessToken = await this.createAccessToken(
+      session.user.id,
+      session.user.email,
+    );
+
+    return {
+      message: 'Token refreshed successfully',
+      accessToken,
+      refreshToken: this.formatRefreshToken(session.id, nextSecret),
+    };
+  }
+
+  async logout(logoutDto: LogoutDto) {
+    const { sessionId, secret } = this.parseRefreshToken(
+      logoutDto.refreshToken,
+    );
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const isMatch = await bcrypt.compare(secret, session.refreshTokenHash);
+
+    if (!isMatch) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (!session.revokedAt) {
+      await this.prisma.session.updateMany({
+        where: {
+          id: session.id,
+          refreshTokenHash: session.refreshTokenHash,
+          revokedAt: null,
+        },
+        data: { revokedAt: new Date() },
+      });
+    }
+
+    return { message: 'Logged out successfully' };
+  }
+
+  private createAccessToken(userId: string, email: string) {
+    return this.jwtService.signAsync({ sub: userId, email });
+  }
+
+  private createRefreshTokenSecret() {
+    return randomBytes(32).toString('base64url');
+  }
+
+  private createRefreshTokenExpiry() {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_TTL_DAYS);
+    return expiresAt;
+  }
+
+  private formatRefreshToken(sessionId: string, secret: string) {
+    return `${sessionId}.${secret}`;
+  }
+
+  private parseRefreshToken(refreshToken: string) {
+    const separatorIndex = refreshToken.indexOf('.');
+
+    if (
+      separatorIndex <= 0 ||
+      separatorIndex === refreshToken.length - 1 ||
+      refreshToken.indexOf('.', separatorIndex + 1) !== -1
+    ) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    return {
+      sessionId: refreshToken.slice(0, separatorIndex),
+      secret: refreshToken.slice(separatorIndex + 1),
+    };
   }
 }

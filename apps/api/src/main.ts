@@ -27,7 +27,9 @@ async function bootstrap() {
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('NexusDev AI API')
-    .setDescription('API documentation for NexusDev AI Developer Engineering Platform')
+    .setDescription(
+      'API documentation for NexusDev AI Developer Engineering Platform',
+    )
     .setVersion('1.0')
     .addBearerAuth()
     .build();
@@ -42,4 +44,4 @@ async function bootstrap() {
   console.log(`Swagger docs running on http://localhost:${port}/api/docs`);
 }
 
-bootstrap();
+void bootstrap();
