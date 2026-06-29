@@ -20,61 +20,86 @@ enum MemberRole {
   VIEWER
 }
 
+enum GitProvider {
+  GITHUB
+  GITLAB
+  BITBUCKET
+}
+
 model User {
-  id           String       @id @default(uuid())
-  email        String       @unique
+  id           String     @id @default(uuid())
+  email        String     @unique
   passwordHash String
   fullName     String?
-  status       UserStatus   @default(ACTIVE)
+  status       UserStatus @default(ACTIVE)
 
-  memberships  Membership[]
-  sessions     Session[]
+  memberships Membership[]
+  sessions    Session[]
 
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  deletedAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 }
 
 model Organization {
-  id          String       @id @default(uuid())
-  name        String
-  slug        String       @unique
+  id   String @id @default(uuid())
+  name String
+  slug String @unique
 
   workspaces  Workspace[]
   memberships Membership[]
 
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  deletedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 }
 
 model Workspace {
-  id             String       @id @default(uuid())
+  id             String @id @default(uuid())
   name           String
   slug           String
   organizationId String
 
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  repositories Repository[]
 
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  deletedAt      DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   @@unique([organizationId, slug])
   @@index([organizationId])
 }
 
+model Repository {
+  id            String      @id @default(uuid())
+  name          String
+  fullName      String
+  provider      GitProvider
+  externalId    String?
+  defaultBranch String?
+  workspaceId   String
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, fullName])
+  @@index([workspaceId])
+}
+
 model Membership {
-  id             String       @id @default(uuid())
+  id             String     @id @default(uuid())
   userId         String
   organizationId String
-  role           MemberRole   @default(DEVELOPER)
+  role           MemberRole @default(DEVELOPER)
 
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([userId, organizationId])
   @@index([organizationId])
@@ -82,18 +107,18 @@ model Membership {
 }
 
 model Session {
-  id           String    @id @default(uuid())
-  userId       String
-  refreshTokenHash String @unique  
-  userAgent    String?
-  ipAddress    String?
-  expiresAt    DateTime
-  revokedAt    DateTime?
+  id               String    @id @default(uuid())
+  userId           String
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
 
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
 }
