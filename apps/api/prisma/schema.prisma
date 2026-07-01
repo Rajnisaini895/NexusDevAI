@@ -26,6 +26,12 @@ enum GitProvider {
   BITBUCKET
 }
 
+enum ProviderConnectionStatus {
+  ACTIVE
+  SUSPENDED
+  DISCONNECTED
+}
+
 model User {
   id           String     @id @default(uuid())
   email        String     @unique
@@ -33,8 +39,9 @@ model User {
   fullName     String?
   status       UserStatus @default(ACTIVE)
 
-  memberships Membership[]
-  sessions    Session[]
+  memberships         Membership[]
+  sessions            Session[]
+  providerConnections ProviderConnection[] @relation("ProviderConnectionCreator")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -46,8 +53,9 @@ model Organization {
   name String
   slug String @unique
 
-  workspaces  Workspace[]
-  memberships Membership[]
+  workspaces          Workspace[]
+  memberships         Membership[]
+  providerConnections ProviderConnection[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -87,6 +95,28 @@ model Repository {
 
   @@unique([workspaceId, fullName])
   @@index([workspaceId])
+}
+
+model ProviderConnection {
+  id                String                   @id @default(uuid())
+  organizationId    String
+  connectedByUserId String
+  provider          GitProvider
+  externalAccountId String
+  accountLogin      String
+  installationId    String?                  @unique
+  status            ProviderConnectionStatus @default(ACTIVE)
+  disconnectedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectedBy  User         @relation("ProviderConnectionCreator", fields: [connectedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, provider, externalAccountId])
+  @@index([organizationId])
+  @@index([connectedByUserId])
 }
 
 model Membership {
