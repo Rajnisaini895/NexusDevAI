@@ -9,5 +9,6 @@ import { ProviderConnectionsService } from './provider-connections.service';
   imports: [PrismaModule],
   controllers: [ProviderConnectionsController],
   providers: [ProviderConnectionsService, GithubAppService],
+  exports: [GithubAppService],
 })
 export class ProviderConnectionsModule {}

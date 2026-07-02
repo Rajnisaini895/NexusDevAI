@@ -13,6 +13,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateRepositoryDto } from './dto/create-repository.dto';
+import { ImportRepositoryDto } from './dto/import-repository.dto';
 import { RepositoriesService } from './repositories.service';
 
 interface AuthenticatedRequest {
@@ -49,6 +50,20 @@ export class RepositoriesController {
     workspaceId: string,
   ) {
     return this.repositoriesService.findAll(request.user.userId, workspaceId);
+  }
+
+  @Post('import')
+  importRepository(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Body() importRepositoryDto: ImportRepositoryDto,
+  ) {
+    return this.repositoriesService.importFromGithub(
+      request.user.userId,
+      workspaceId,
+      importRepositoryDto,
+    );
   }
 
   @Get(':repositoryId')

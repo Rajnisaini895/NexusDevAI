@@ -80,21 +80,26 @@ model Workspace {
 }
 
 model Repository {
-  id            String      @id @default(uuid())
-  name          String
-  fullName      String
-  provider      GitProvider
-  externalId    String?
-  defaultBranch String?
-  workspaceId   String
+  id                   String      @id @default(uuid())
+  name                 String
+  fullName             String
+  provider             GitProvider
+  externalId           String?
+  defaultBranch        String?
+  url                  String?
+  isPrivate            Boolean?
+  workspaceId          String
+  providerConnectionId String?
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  providerConnection ProviderConnection? @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([workspaceId, fullName])
   @@index([workspaceId])
+  @@index([providerConnectionId])
 }
 
 model ProviderConnection {
@@ -110,6 +115,7 @@ model ProviderConnection {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   connectedBy  User         @relation("ProviderConnectionCreator", fields: [connectedByUserId], references: [id], onDelete: Restrict)
+  repositories Repository[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

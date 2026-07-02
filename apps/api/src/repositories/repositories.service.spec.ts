@@ -1,8 +1,18 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
-import { GitProvider, MemberRole } from '@prisma/client';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  GitProvider,
+  MemberRole,
+  Prisma,
+  ProviderConnectionStatus,
+} from '@prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { GithubAppService } from '../provider-connections/github-app.service';
 import { RepositoriesService } from './repositories.service';
 
 describe('RepositoriesService', () => {
@@ -18,9 +28,16 @@ describe('RepositoriesService', () => {
       findFirst: jest.fn(),
       findMany: jest.fn(),
     },
+    providerConnection: {
+      findFirst: jest.fn(),
+    },
     workspace: {
       findFirst: jest.fn(),
     },
+  };
+
+  const githubAppService = {
+    listInstallationRepositories: jest.fn(),
   };
 
   const repository = {
@@ -30,7 +47,10 @@ describe('RepositoriesService', () => {
     provider: GitProvider.GITHUB,
     externalId: '123456',
     defaultBranch: 'main',
+    url: 'https://github.com/Rajnisaini895/NexusDevAI',
+    isPrivate: false,
     workspaceId: 'workspace-id',
+    providerConnectionId: null,
     createdAt: new Date('2026-06-29T00:00:00.000Z'),
     updatedAt: new Date('2026-06-29T00:00:00.000Z'),
   };
@@ -48,6 +68,7 @@ describe('RepositoriesService', () => {
       providers: [
         RepositoriesService,
         { provide: PrismaService, useValue: prisma },
+        { provide: GithubAppService, useValue: githubAppService },
       ],
     }).compile();
 
@@ -81,7 +102,10 @@ describe('RepositoriesService', () => {
         provider: true,
         externalId: true,
         defaultBranch: true,
+        url: true,
+        isPrivate: true,
         workspaceId: true,
+        providerConnectionId: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -119,7 +143,10 @@ describe('RepositoriesService', () => {
         provider: true,
         externalId: true,
         defaultBranch: true,
+        url: true,
+        isPrivate: true,
         workspaceId: true,
+        providerConnectionId: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -142,6 +169,134 @@ describe('RepositoriesService', () => {
         },
       }),
     );
+  });
+
+  it('imports a repository available through an organization GitHub connection', async () => {
+    prisma.providerConnection.findFirst.mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111',
+      installationId: '98765',
+    });
+    githubAppService.listInstallationRepositories.mockResolvedValue([
+      {
+        externalId: '123456',
+        name: 'NexusDevAI',
+        fullName: 'Rajnisaini895/NexusDevAI',
+        defaultBranch: 'main',
+        private: false,
+        url: 'https://github.com/Rajnisaini895/NexusDevAI',
+      },
+    ]);
+    prisma.repository.create.mockResolvedValue({
+      ...repository,
+      providerConnectionId: '11111111-1111-4111-8111-111111111111',
+    });
+
+    const result = await service.importFromGithub('user-id', 'workspace-id', {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      externalRepositoryId: '123456',
+    });
+
+    expect(prisma.providerConnection.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: '11111111-1111-4111-8111-111111111111',
+        organizationId: 'organization-id',
+        provider: GitProvider.GITHUB,
+        status: ProviderConnectionStatus.ACTIVE,
+        installationId: { not: null },
+      },
+      select: { id: true, installationId: true },
+    });
+    expect(prisma.repository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          name: 'NexusDevAI',
+          fullName: 'Rajnisaini895/NexusDevAI',
+          provider: GitProvider.GITHUB,
+          externalId: '123456',
+          defaultBranch: 'main',
+          url: 'https://github.com/Rajnisaini895/NexusDevAI',
+          isPrivate: false,
+          workspaceId: 'workspace-id',
+          providerConnectionId: '11111111-1111-4111-8111-111111111111',
+        },
+      }),
+    );
+    expect(result.message).toBe('Repository imported successfully');
+  });
+
+  it('prevents a viewer from importing a repository', async () => {
+    prisma.membership.findFirst.mockResolvedValue({ role: MemberRole.VIEWER });
+
+    await expect(
+      service.importFromGithub('user-id', 'workspace-id', {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        externalRepositoryId: '123456',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(prisma.providerConnection.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inactive or cross-organization GitHub connection', async () => {
+    prisma.providerConnection.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.importFromGithub('user-id', 'workspace-id', {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        externalRepositoryId: '123456',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(
+      githubAppService.listInstallationRepositories,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects a repository unavailable to the GitHub installation', async () => {
+    prisma.providerConnection.findFirst.mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111',
+      installationId: '98765',
+    });
+    githubAppService.listInstallationRepositories.mockResolvedValue([]);
+
+    await expect(
+      service.importFromGithub('user-id', 'workspace-id', {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        externalRepositoryId: '123456',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(prisma.repository.create).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict when an imported repository already exists', async () => {
+    prisma.providerConnection.findFirst.mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111',
+      installationId: '98765',
+    });
+    githubAppService.listInstallationRepositories.mockResolvedValue([
+      {
+        externalId: '123456',
+        name: 'NexusDevAI',
+        fullName: 'Rajnisaini895/NexusDevAI',
+        defaultBranch: 'main',
+        private: false,
+        url: 'https://github.com/Rajnisaini895/NexusDevAI',
+      },
+    ]);
+    prisma.repository.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('duplicate', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+      }),
+    );
+
+    await expect(
+      service.importFromGithub('user-id', 'workspace-id', {
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        externalRepositoryId: '123456',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('allows an admin to remove a workspace repository', async () => {

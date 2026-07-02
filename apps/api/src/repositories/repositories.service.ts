@@ -4,14 +4,24 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MemberRole, Prisma } from '@prisma/client';
+import {
+  GitProvider,
+  MemberRole,
+  Prisma,
+  ProviderConnectionStatus,
+} from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { GithubAppService } from '../provider-connections/github-app.service';
 import { CreateRepositoryDto } from './dto/create-repository.dto';
+import { ImportRepositoryDto } from './dto/import-repository.dto';
 
 @Injectable()
 export class RepositoriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly githubAppService: GithubAppService,
+  ) {}
 
   async create(
     userId: string,
@@ -34,21 +44,87 @@ export class RepositoriesService {
           defaultBranch: createRepositoryDto.defaultBranch?.trim(),
           workspaceId,
         },
-        select: {
-          id: true,
-          name: true,
-          fullName: true,
-          provider: true,
-          externalId: true,
-          defaultBranch: true,
-          workspaceId: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: this.repositorySelect,
       });
 
       return {
         message: 'Repository created successfully',
+        repository,
+      };
+    } catch (error: unknown) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Repository already exists in this workspace',
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  async importFromGithub(
+    userId: string,
+    workspaceId: string,
+    importRepositoryDto: ImportRepositoryDto,
+  ) {
+    const membership = await this.findWorkspaceMembership(userId, workspaceId);
+
+    if (membership.role === MemberRole.VIEWER) {
+      throw new ForbiddenException('Viewers cannot import repositories');
+    }
+
+    const connection = await this.prisma.providerConnection.findFirst({
+      where: {
+        id: importRepositoryDto.connectionId,
+        organizationId: membership.organizationId,
+        provider: GitProvider.GITHUB,
+        status: ProviderConnectionStatus.ACTIVE,
+        installationId: { not: null },
+      },
+      select: { id: true, installationId: true },
+    });
+
+    if (!connection?.installationId) {
+      throw new NotFoundException('Active GitHub connection not found');
+    }
+
+    const availableRepositories =
+      await this.githubAppService.listInstallationRepositories(
+        connection.installationId,
+      );
+    const githubRepository = availableRepositories.find(
+      (repository) =>
+        repository.externalId ===
+        importRepositoryDto.externalRepositoryId.trim(),
+    );
+
+    if (!githubRepository) {
+      throw new NotFoundException(
+        'Repository is not available through this GitHub connection',
+      );
+    }
+
+    try {
+      const repository = await this.prisma.repository.create({
+        data: {
+          name: githubRepository.name,
+          fullName: githubRepository.fullName,
+          provider: GitProvider.GITHUB,
+          externalId: githubRepository.externalId,
+          defaultBranch: githubRepository.defaultBranch,
+          url: githubRepository.url,
+          isPrivate: githubRepository.private,
+          workspaceId,
+          providerConnectionId: connection.id,
+        },
+        select: this.repositorySelect,
+      });
+
+      return {
+        message: 'Repository imported successfully',
         repository,
       };
     } catch (error: unknown) {
@@ -70,17 +146,7 @@ export class RepositoriesService {
 
     const repositories = await this.prisma.repository.findMany({
       where: { workspaceId },
-      select: {
-        id: true,
-        name: true,
-        fullName: true,
-        provider: true,
-        externalId: true,
-        defaultBranch: true,
-        workspaceId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: this.repositorySelect,
       orderBy: { createdAt: 'desc' },
     });
 
@@ -95,17 +161,7 @@ export class RepositoriesService {
         id: repositoryId,
         workspaceId,
       },
-      select: {
-        id: true,
-        name: true,
-        fullName: true,
-        provider: true,
-        externalId: true,
-        defaultBranch: true,
-        workspaceId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: this.repositorySelect,
     });
 
     if (!repository) {
@@ -172,6 +228,21 @@ export class RepositoriesService {
       throw new ForbiddenException('You do not have access to this workspace');
     }
 
-    return membership;
+    return { ...membership, organizationId: workspace.organizationId };
   }
+
+  private readonly repositorySelect = {
+    id: true,
+    name: true,
+    fullName: true,
+    provider: true,
+    externalId: true,
+    defaultBranch: true,
+    url: true,
+    isPrivate: true,
+    workspaceId: true,
+    providerConnectionId: true,
+    createdAt: true,
+    updatedAt: true,
+  } as const;
 }
