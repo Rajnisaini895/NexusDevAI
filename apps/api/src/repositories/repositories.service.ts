@@ -322,6 +322,9 @@ export class RepositoriesService {
     isPrivate: true,
     workspaceId: true,
     providerConnectionId: true,
+    _count: {
+      select: { branches: true, commits: true },
+    },
     createdAt: true,
     updatedAt: true,
   } as const;

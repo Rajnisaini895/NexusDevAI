@@ -192,6 +192,9 @@ describe('RepositoriesService', () => {
         isPrivate: true,
         workspaceId: true,
         providerConnectionId: true,
+        _count: {
+          select: { branches: true, commits: true },
+        },
         createdAt: true,
         updatedAt: true,
       },
@@ -233,6 +236,9 @@ describe('RepositoriesService', () => {
         isPrivate: true,
         workspaceId: true,
         providerConnectionId: true,
+        _count: {
+          select: { branches: true, commits: true },
+        },
         createdAt: true,
         updatedAt: true,
       },
