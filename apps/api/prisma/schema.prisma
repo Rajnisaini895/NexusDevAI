@@ -96,6 +96,7 @@ model Repository {
 
   branches RepositoryBranch[]
   commits  RepositoryCommit[]
+  files    RepositoryFile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -139,6 +140,26 @@ model RepositoryCommit {
   @@unique([repositoryId, sha])
   @@index([repositoryId])
   @@index([sha])
+}
+
+model RepositoryFile {
+  id           String  @id @default(uuid())
+  repositoryId String
+  path         String
+  sha          String
+  size         Int
+  language     String?
+  content      String  @db.Text
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastSyncedAt DateTime @default(now())
+
+  @@unique([repositoryId, path])
+  @@index([repositoryId])
+  @@index([repositoryId, language])
 }
 
 model ProviderConnection {

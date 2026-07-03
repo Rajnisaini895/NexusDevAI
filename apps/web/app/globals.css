@@ -576,6 +576,27 @@ input:focus {
   opacity: 0.6;
   cursor: wait;
 }
+.repo-actions {
+  display: grid;
+  gap: 8px;
+}
+.ingest-button {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--green);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+.ingest-button:hover:not(:disabled) {
+  background: var(--green-dark);
+}
+.ingest-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
 .dashboard-alert {
   margin: 0 0 20px;
   padding: 13px 15px;
@@ -644,7 +665,7 @@ input:focus {
   .repository-row {
     grid-template-columns: auto minmax(0, 1fr);
   }
-  .sync-button {
+  .repo-actions {
     grid-column: 1 / -1;
     width: 100%;
   }

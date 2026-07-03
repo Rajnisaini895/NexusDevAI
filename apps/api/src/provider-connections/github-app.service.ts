@@ -54,6 +54,23 @@ interface GithubCommit {
   };
 }
 
+interface GithubTreeResponse {
+  truncated: boolean;
+  tree: Array<{
+    path: string;
+    mode: string;
+    type: 'blob' | 'tree' | 'commit';
+    sha: string;
+    size?: number;
+  }>;
+}
+
+interface GithubBlob {
+  content: string;
+  encoding: string;
+  size: number;
+}
+
 interface SetupState {
   organizationId: string;
   userId: string;
@@ -64,6 +81,8 @@ interface SetupState {
 export class GithubAppService {
   private readonly apiUrl = 'https://api.github.com';
   private readonly apiVersion = '2026-03-10';
+  private readonly maxFileSize = 100_000;
+  private readonly maxFiles = 250;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -186,6 +205,174 @@ export class GithubAppService {
         url: commit.html_url,
       })),
     };
+  }
+
+  async getRepositoryFiles(
+    installationId: string,
+    fullName: string,
+    defaultBranch: string,
+  ) {
+    const installationToken =
+      await this.createInstallationToken(installationId);
+    const repositoryPath = fullName
+      .split('/')
+      .map((part) => encodeURIComponent(part))
+      .join('/');
+    const tree = await this.request<GithubTreeResponse>(
+      `/repos/${repositoryPath}/git/trees/${encodeURIComponent(defaultBranch)}?recursive=1`,
+      installationToken.token,
+    );
+
+    if (tree.truncated) {
+      throw new BadGatewayException(
+        'GitHub repository tree is too large to ingest safely',
+      );
+    }
+
+    const candidates = tree.tree
+      .filter(
+        (entry) =>
+          entry.type === 'blob' &&
+          typeof entry.size === 'number' &&
+          entry.size <= this.maxFileSize &&
+          this.isSupportedSourceFile(entry.path),
+      )
+      .slice(0, this.maxFiles);
+
+    const files: Array<{
+      path: string;
+      sha: string;
+      size: number;
+      language: string | null;
+      content: string;
+    }> = [];
+
+    for (let index = 0; index < candidates.length; index += 10) {
+      const batch = candidates.slice(index, index + 10);
+      const batchFiles = await Promise.all(
+        batch.map(async (entry) => {
+          const blob = await this.request<GithubBlob>(
+            `/repos/${repositoryPath}/git/blobs/${entry.sha}`,
+            installationToken.token,
+          );
+
+          if (blob.encoding !== 'base64') return null;
+          const content = Buffer.from(
+            blob.content.replace(/\s/g, ''),
+            'base64',
+          ).toString('utf8');
+          if (content.includes('\u0000')) return null;
+
+          return {
+            path: entry.path,
+            sha: entry.sha,
+            size: blob.size,
+            language: this.detectLanguage(entry.path),
+            content,
+          };
+        }),
+      );
+      files.push(...batchFiles.filter((file) => file !== null));
+    }
+
+    return {
+      files,
+      skipped:
+        tree.tree.filter((entry) => entry.type === 'blob').length -
+        files.length,
+      limited: candidates.length === this.maxFiles,
+    };
+  }
+
+  private isSupportedSourceFile(path: string) {
+    const normalized = path.toLowerCase();
+    const segments = normalized.split('/');
+    const blockedDirectories = new Set([
+      'node_modules',
+      'dist',
+      'build',
+      '.next',
+      'coverage',
+      'vendor',
+      '.git',
+    ]);
+    const filename = segments.at(-1) ?? '';
+
+    if (segments.some((segment) => blockedDirectories.has(segment)))
+      return false;
+    if (
+      filename === '.env' ||
+      filename.startsWith('.env.') ||
+      /\.(pem|key|p12|pfx|crt|cer|der|jks|keystore)$/i.test(filename)
+    ) {
+      return false;
+    }
+
+    const supportedNames = new Set([
+      'dockerfile',
+      'makefile',
+      'readme',
+      'readme.md',
+      'package.json',
+      'tsconfig.json',
+      'docker-compose.yml',
+      'docker-compose.yaml',
+    ]);
+    if (supportedNames.has(filename)) return true;
+
+    return /\.(ts|tsx|js|jsx|mjs|cjs|py|java|go|rs|rb|php|cs|cpp|cc|c|h|hpp|swift|kt|kts|scala|vue|svelte|html|css|scss|sass|less|sql|graphql|gql|sh|bash|zsh|md|mdx|json|ya?ml|toml|xml)$/i.test(
+      filename,
+    );
+  }
+
+  private detectLanguage(path: string) {
+    const filename = path.toLowerCase().split('/').at(-1) ?? '';
+    const extension = filename.includes('.') ? filename.split('.').at(-1) : '';
+    const languages: Record<string, string> = {
+      ts: 'TypeScript',
+      tsx: 'TypeScript',
+      js: 'JavaScript',
+      jsx: 'JavaScript',
+      mjs: 'JavaScript',
+      cjs: 'JavaScript',
+      py: 'Python',
+      java: 'Java',
+      go: 'Go',
+      rs: 'Rust',
+      rb: 'Ruby',
+      php: 'PHP',
+      cs: 'C#',
+      cpp: 'C++',
+      cc: 'C++',
+      c: 'C',
+      h: 'C',
+      hpp: 'C++',
+      swift: 'Swift',
+      kt: 'Kotlin',
+      kts: 'Kotlin',
+      scala: 'Scala',
+      vue: 'Vue',
+      svelte: 'Svelte',
+      html: 'HTML',
+      css: 'CSS',
+      scss: 'SCSS',
+      sass: 'Sass',
+      less: 'Less',
+      sql: 'SQL',
+      graphql: 'GraphQL',
+      gql: 'GraphQL',
+      sh: 'Shell',
+      bash: 'Shell',
+      zsh: 'Shell',
+      md: 'Markdown',
+      mdx: 'MDX',
+      json: 'JSON',
+      yaml: 'YAML',
+      yml: 'YAML',
+      toml: 'TOML',
+      xml: 'XML',
+    };
+    return extension ? (languages[extension] ?? null) : null;
   }
 
   private createInstallationToken(installationId: string) {

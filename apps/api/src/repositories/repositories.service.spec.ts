@@ -35,6 +35,10 @@ describe('RepositoriesService', () => {
     repositoryCommit: {
       upsert: jest.fn(),
     },
+    repositoryFile: {
+      deleteMany: jest.fn(),
+      upsert: jest.fn(),
+    },
     providerConnection: {
       findFirst: jest.fn(),
     },
@@ -45,6 +49,7 @@ describe('RepositoriesService', () => {
 
   const githubAppService = {
     getRepositoryMetadata: jest.fn(),
+    getRepositoryFiles: jest.fn(),
     listInstallationRepositories: jest.fn(),
   };
 
@@ -74,6 +79,8 @@ describe('RepositoriesService', () => {
     prisma.$transaction.mockResolvedValue([]);
     prisma.repositoryBranch.upsert.mockResolvedValue({});
     prisma.repositoryCommit.upsert.mockResolvedValue({});
+    prisma.repositoryFile.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.repositoryFile.upsert.mockResolvedValue({});
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -161,6 +168,62 @@ describe('RepositoriesService', () => {
     expect(githubAppService.getRepositoryMetadata).not.toHaveBeenCalled();
   });
 
+  it('ingests supported GitHub files and removes stale records', async () => {
+    prisma.repository.findFirst.mockResolvedValue({
+      id: 'repository-id',
+      fullName: 'Rajnisaini895/NexusDevAI',
+      defaultBranch: 'main',
+      providerConnection: { installationId: '98765' },
+    });
+    githubAppService.getRepositoryFiles.mockResolvedValue({
+      files: [
+        {
+          path: 'src/main.ts',
+          sha: 'file-sha',
+          size: 42,
+          language: 'TypeScript',
+          content: 'export const value = 1;',
+        },
+      ],
+      skipped: 2,
+      limited: false,
+    });
+
+    await expect(
+      service.ingestFiles('user-id', 'workspace-id', 'repository-id'),
+    ).resolves.toEqual({
+      message: 'Repository files ingested successfully',
+      ingested: { files: 1, skipped: 2, limited: false },
+    });
+
+    expect(prisma.repositoryFile.deleteMany).toHaveBeenCalledWith({
+      where: {
+        repositoryId: 'repository-id',
+        path: { notIn: ['src/main.ts'] },
+      },
+    });
+    expect(prisma.repositoryFile.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          repositoryId_path: {
+            repositoryId: 'repository-id',
+            path: 'src/main.ts',
+          },
+        },
+      }),
+    );
+  });
+
+  it('prevents a viewer from ingesting repository files', async () => {
+    prisma.membership.findFirst.mockResolvedValue({ role: MemberRole.VIEWER });
+
+    await expect(
+      service.ingestFiles('user-id', 'workspace-id', 'repository-id'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(githubAppService.getRepositoryFiles).not.toHaveBeenCalled();
+  });
+
   it('allows a developer to add a repository to an authorized workspace', async () => {
     prisma.repository.create.mockResolvedValue(repository);
 
@@ -193,7 +256,7 @@ describe('RepositoriesService', () => {
         workspaceId: true,
         providerConnectionId: true,
         _count: {
-          select: { branches: true, commits: true },
+          select: { branches: true, commits: true, files: true },
         },
         createdAt: true,
         updatedAt: true,
@@ -237,7 +300,7 @@ describe('RepositoriesService', () => {
         workspaceId: true,
         providerConnectionId: true,
         _count: {
-          select: { branches: true, commits: true },
+          select: { branches: true, commits: true, files: true },
         },
         createdAt: true,
         updatedAt: true,

@@ -102,4 +102,61 @@ describe('GithubAppService', () => {
       ],
     });
   });
+
+  it('ingests supported source files while excluding secrets and binaries', async () => {
+    jest
+      .spyOn(service as never, 'createInstallationToken' as never)
+      .mockResolvedValue({ token: 'installation-token' } as never);
+    const request = jest.spyOn(service as never, 'request' as never);
+    request
+      .mockResolvedValueOnce({
+        truncated: false,
+        tree: [
+          {
+            path: 'src/main.ts',
+            type: 'blob',
+            mode: '100644',
+            sha: 'source-sha',
+            size: 24,
+          },
+          {
+            path: '.env',
+            type: 'blob',
+            mode: '100644',
+            sha: 'secret-sha',
+            size: 20,
+          },
+          {
+            path: 'logo.png',
+            type: 'blob',
+            mode: '100644',
+            sha: 'image-sha',
+            size: 200,
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce({
+        content: Buffer.from('export const ready = true;').toString('base64'),
+        encoding: 'base64',
+        size: 26,
+      } as never);
+
+    await expect(
+      service.getRepositoryFiles('98765', 'acme/project', 'main'),
+    ).resolves.toEqual({
+      files: [
+        {
+          path: 'src/main.ts',
+          sha: 'source-sha',
+          size: 26,
+          language: 'TypeScript',
+          content: 'export const ready = true;',
+        },
+      ],
+      skipped: 2,
+      limited: false,
+    });
+
+    expect(request).toHaveBeenCalledTimes(2);
+  });
 });

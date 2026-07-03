@@ -282,6 +282,86 @@ export class RepositoriesService {
     };
   }
 
+  async ingestFiles(userId: string, workspaceId: string, repositoryId: string) {
+    const membership = await this.findWorkspaceMembership(userId, workspaceId);
+
+    if (membership.role === MemberRole.VIEWER) {
+      throw new ForbiddenException('Viewers cannot ingest repository files');
+    }
+
+    const repository = await this.prisma.repository.findFirst({
+      where: {
+        id: repositoryId,
+        workspaceId,
+        provider: GitProvider.GITHUB,
+        providerConnection: {
+          organizationId: membership.organizationId,
+          status: ProviderConnectionStatus.ACTIVE,
+          installationId: { not: null },
+        },
+      },
+      select: {
+        id: true,
+        fullName: true,
+        defaultBranch: true,
+        providerConnection: { select: { installationId: true } },
+      },
+    });
+    const installationId = repository?.providerConnection?.installationId;
+
+    if (!repository || !installationId || !repository.defaultBranch) {
+      throw new NotFoundException('Ingestible GitHub repository not found');
+    }
+
+    const ingestion = await this.githubAppService.getRepositoryFiles(
+      installationId,
+      repository.fullName,
+      repository.defaultBranch,
+    );
+    const synchronizedAt = new Date();
+    const paths = ingestion.files.map((file) => file.path);
+
+    await this.prisma.$transaction([
+      this.prisma.repositoryFile.deleteMany({
+        where: {
+          repositoryId: repository.id,
+          ...(paths.length > 0 ? { path: { notIn: paths } } : {}),
+        },
+      }),
+      ...ingestion.files.map((file) =>
+        this.prisma.repositoryFile.upsert({
+          where: {
+            repositoryId_path: {
+              repositoryId: repository.id,
+              path: file.path,
+            },
+          },
+          create: {
+            repositoryId: repository.id,
+            ...file,
+            lastSyncedAt: synchronizedAt,
+          },
+          update: {
+            sha: file.sha,
+            size: file.size,
+            language: file.language,
+            content: file.content,
+            lastSyncedAt: synchronizedAt,
+          },
+        }),
+      ),
+    ]);
+
+    return {
+      message: 'Repository files ingested successfully',
+      ingested: {
+        files: ingestion.files.length,
+        skipped: ingestion.skipped,
+        limited: ingestion.limited,
+      },
+    };
+  }
+
   private async findWorkspaceMembership(userId: string, workspaceId: string) {
     const workspace = await this.prisma.workspace.findFirst({
       where: {
@@ -323,7 +403,7 @@ export class RepositoriesService {
     workspaceId: true,
     providerConnectionId: true,
     _count: {
-      select: { branches: true, commits: true },
+      select: { branches: true, commits: true, files: true },
     },
     createdAt: true,
     updatedAt: true,

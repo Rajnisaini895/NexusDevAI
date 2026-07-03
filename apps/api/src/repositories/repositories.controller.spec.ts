@@ -13,6 +13,7 @@ describe('RepositoriesController', () => {
     findOne: jest.fn(),
     remove: jest.fn(),
     synchronize: jest.fn(),
+    ingestFiles: jest.fn(),
   };
 
   const request = {
@@ -87,6 +88,20 @@ describe('RepositoriesController', () => {
     await controller.synchronize(request, 'workspace-id', 'repository-id');
 
     expect(repositoriesService.synchronize).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+    );
+  });
+
+  it('scopes file ingestion to the authenticated user and workspace', async () => {
+    repositoriesService.ingestFiles.mockResolvedValue({
+      message: 'Repository files ingested successfully',
+    });
+
+    await controller.ingestFiles(request, 'workspace-id', 'repository-id');
+
+    expect(repositoriesService.ingestFiles).toHaveBeenCalledWith(
       'user-id',
       'workspace-id',
       'repository-id',
