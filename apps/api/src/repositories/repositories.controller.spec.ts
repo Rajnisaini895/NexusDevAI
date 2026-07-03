@@ -12,6 +12,7 @@ describe('RepositoriesController', () => {
     findAll: jest.fn(),
     findOne: jest.fn(),
     remove: jest.fn(),
+    synchronize: jest.fn(),
   };
 
   const request = {
@@ -72,6 +73,20 @@ describe('RepositoriesController', () => {
     await controller.remove(request, 'workspace-id', 'repository-id');
 
     expect(repositoriesService.remove).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+    );
+  });
+
+  it('scopes repository synchronization to the authenticated user and workspace', async () => {
+    repositoriesService.synchronize.mockResolvedValue({
+      message: 'Repository synchronized successfully',
+    });
+
+    await controller.synchronize(request, 'workspace-id', 'repository-id');
+
+    expect(repositoriesService.synchronize).toHaveBeenCalledWith(
       'user-id',
       'workspace-id',
       'repository-id',

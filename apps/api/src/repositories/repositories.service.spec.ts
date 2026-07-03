@@ -19,6 +19,7 @@ describe('RepositoriesService', () => {
   let service: RepositoriesService;
 
   const prisma = {
+    $transaction: jest.fn(),
     membership: {
       findFirst: jest.fn(),
     },
@@ -27,6 +28,12 @@ describe('RepositoriesService', () => {
       delete: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),
+    },
+    repositoryBranch: {
+      upsert: jest.fn(),
+    },
+    repositoryCommit: {
+      upsert: jest.fn(),
     },
     providerConnection: {
       findFirst: jest.fn(),
@@ -37,6 +44,7 @@ describe('RepositoriesService', () => {
   };
 
   const githubAppService = {
+    getRepositoryMetadata: jest.fn(),
     listInstallationRepositories: jest.fn(),
   };
 
@@ -63,6 +71,9 @@ describe('RepositoriesService', () => {
     prisma.membership.findFirst.mockResolvedValue({
       role: MemberRole.DEVELOPER,
     });
+    prisma.$transaction.mockResolvedValue([]);
+    prisma.repositoryBranch.upsert.mockResolvedValue({});
+    prisma.repositoryCommit.upsert.mockResolvedValue({});
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -73,6 +84,81 @@ describe('RepositoriesService', () => {
     }).compile();
 
     service = module.get<RepositoriesService>(RepositoriesService);
+  });
+
+  it('synchronizes GitHub branches and commits for a workspace developer', async () => {
+    prisma.repository.findFirst.mockResolvedValue({
+      id: 'repository-id',
+      fullName: 'Rajnisaini895/NexusDevAI',
+      defaultBranch: 'main',
+      providerConnection: { installationId: '98765' },
+    });
+    githubAppService.getRepositoryMetadata.mockResolvedValue({
+      branches: [{ name: 'main', sha: 'branch-sha', isDefault: true }],
+      commits: [
+        {
+          sha: 'commit-sha',
+          message: 'feat: synchronize metadata',
+          authorName: 'Rajni',
+          authorEmail: 'rajni@example.com',
+          committedAt: new Date('2026-07-03T00:00:00.000Z'),
+          url: 'https://github.com/Rajnisaini895/NexusDevAI/commit/commit-sha',
+        },
+      ],
+    });
+
+    await expect(
+      service.synchronize('user-id', 'workspace-id', 'repository-id'),
+    ).resolves.toEqual({
+      message: 'Repository synchronized successfully',
+      synchronized: { branches: 1, commits: 1 },
+    });
+
+    expect(githubAppService.getRepositoryMetadata).toHaveBeenCalledWith(
+      '98765',
+      'Rajnisaini895/NexusDevAI',
+      'main',
+    );
+    expect(prisma.repositoryBranch.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          repositoryId_name: {
+            repositoryId: 'repository-id',
+            name: 'main',
+          },
+        },
+      }),
+    );
+    expect(prisma.repositoryCommit.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          repositoryId_sha: {
+            repositoryId: 'repository-id',
+            sha: 'commit-sha',
+          },
+        },
+      }),
+    );
+  });
+
+  it('prevents a viewer from synchronizing repositories', async () => {
+    prisma.membership.findFirst.mockResolvedValue({ role: MemberRole.VIEWER });
+
+    await expect(
+      service.synchronize('user-id', 'workspace-id', 'repository-id'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(githubAppService.getRepositoryMetadata).not.toHaveBeenCalled();
+  });
+
+  it('rejects a repository without an active GitHub connection', async () => {
+    prisma.repository.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.synchronize('user-id', 'workspace-id', 'repository-id'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(githubAppService.getRepositoryMetadata).not.toHaveBeenCalled();
   });
 
   it('allows a developer to add a repository to an authorized workspace', async () => {

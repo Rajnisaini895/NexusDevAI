@@ -202,6 +202,86 @@ export class RepositoriesService {
     return { message: 'Repository removed successfully' };
   }
 
+  async synchronize(userId: string, workspaceId: string, repositoryId: string) {
+    const membership = await this.findWorkspaceMembership(userId, workspaceId);
+
+    if (membership.role === MemberRole.VIEWER) {
+      throw new ForbiddenException('Viewers cannot synchronize repositories');
+    }
+
+    const repository = await this.prisma.repository.findFirst({
+      where: {
+        id: repositoryId,
+        workspaceId,
+        provider: GitProvider.GITHUB,
+        providerConnection: {
+          organizationId: membership.organizationId,
+          status: ProviderConnectionStatus.ACTIVE,
+          installationId: { not: null },
+        },
+      },
+      select: {
+        id: true,
+        fullName: true,
+        defaultBranch: true,
+        providerConnection: { select: { installationId: true } },
+      },
+    });
+
+    const installationId = repository?.providerConnection?.installationId;
+
+    if (!repository || !installationId || !repository.defaultBranch) {
+      throw new NotFoundException('Synchronizable GitHub repository not found');
+    }
+
+    const metadata = await this.githubAppService.getRepositoryMetadata(
+      installationId,
+      repository.fullName,
+      repository.defaultBranch,
+    );
+
+    await this.prisma.$transaction([
+      ...metadata.branches.map((branch) =>
+        this.prisma.repositoryBranch.upsert({
+          where: {
+            repositoryId_name: {
+              repositoryId: repository.id,
+              name: branch.name,
+            },
+          },
+          create: { repositoryId: repository.id, ...branch },
+          update: {
+            sha: branch.sha,
+            isDefault: branch.isDefault,
+          },
+        }),
+      ),
+      ...metadata.commits.map((commit) =>
+        this.prisma.repositoryCommit.upsert({
+          where: {
+            repositoryId_sha: { repositoryId: repository.id, sha: commit.sha },
+          },
+          create: { repositoryId: repository.id, ...commit },
+          update: {
+            message: commit.message,
+            authorName: commit.authorName,
+            authorEmail: commit.authorEmail,
+            committedAt: commit.committedAt,
+            url: commit.url,
+          },
+        }),
+      ),
+    ]);
+
+    return {
+      message: 'Repository synchronized successfully',
+      synchronized: {
+        branches: metadata.branches.length,
+        commits: metadata.commits.length,
+      },
+    };
+  }
+
   private async findWorkspaceMembership(userId: string, workspaceId: string) {
     const workspace = await this.prisma.workspace.findFirst({
       where: {

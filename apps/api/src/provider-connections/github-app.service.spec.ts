@@ -60,4 +60,46 @@ describe('GithubAppService', () => {
       service.verifyState(tamperedState, 'organization-id', 'user-id'),
     ).toThrow(BadRequestException);
   });
+
+  it('maps GitHub branches and commits into repository metadata', async () => {
+    jest
+      .spyOn(service as never, 'createInstallationToken' as never)
+      .mockResolvedValue({ token: 'installation-token' } as never);
+    const request = jest.spyOn(service as never, 'request' as never);
+    request
+      .mockResolvedValueOnce([
+        { name: 'main', commit: { sha: 'branch-sha' } },
+      ] as never)
+      .mockResolvedValueOnce([
+        {
+          sha: 'commit-sha',
+          html_url: 'https://github.com/acme/project/commit/commit-sha',
+          commit: {
+            message: 'feat: sync repository',
+            author: {
+              name: 'Rajni',
+              email: 'rajni@example.com',
+              date: '2026-07-03T00:00:00.000Z',
+            },
+            committer: { date: '2026-07-03T00:00:00.000Z' },
+          },
+        },
+      ] as never);
+
+    await expect(
+      service.getRepositoryMetadata('98765', 'acme/project', 'main'),
+    ).resolves.toEqual({
+      branches: [{ name: 'main', sha: 'branch-sha', isDefault: true }],
+      commits: [
+        {
+          sha: 'commit-sha',
+          message: 'feat: sync repository',
+          authorName: 'Rajni',
+          authorEmail: 'rajni@example.com',
+          committedAt: new Date('2026-07-03T00:00:00.000Z'),
+          url: 'https://github.com/acme/project/commit/commit-sha',
+        },
+      ],
+    });
+  });
 });

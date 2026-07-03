@@ -81,6 +81,21 @@ export class RepositoriesController {
     );
   }
 
+  @Post(':repositoryId/sync')
+  synchronize(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+  ) {
+    return this.repositoriesService.synchronize(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+    );
+  }
+
   @Delete(':repositoryId')
   remove(
     @Req() request: AuthenticatedRequest,

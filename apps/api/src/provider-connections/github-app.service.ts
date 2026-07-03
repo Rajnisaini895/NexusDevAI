@@ -35,6 +35,25 @@ interface GithubRepositoryResponse {
   repositories: GithubRepository[];
 }
 
+interface GithubBranch {
+  name: string;
+  commit: { sha: string };
+}
+
+interface GithubCommit {
+  sha: string;
+  html_url: string;
+  commit: {
+    message: string;
+    author: {
+      name: string;
+      email: string;
+      date: string;
+    } | null;
+    committer: { date: string } | null;
+  };
+}
+
 interface SetupState {
   organizationId: string;
   userId: string;
@@ -107,11 +126,8 @@ export class GithubAppService {
   }
 
   async listInstallationRepositories(installationId: string) {
-    const installationToken = await this.request<GithubInstallationToken>(
-      `/app/installations/${installationId}/access_tokens`,
-      this.createAppJwt(),
-      { method: 'POST' },
-    );
+    const installationToken =
+      await this.createInstallationToken(installationId);
 
     const response = await this.request<GithubRepositoryResponse>(
       '/installation/repositories?per_page=100',
@@ -126,6 +142,58 @@ export class GithubAppService {
       private: repository.private,
       url: repository.html_url,
     }));
+  }
+
+  async getRepositoryMetadata(
+    installationId: string,
+    fullName: string,
+    defaultBranch: string,
+  ) {
+    const installationToken =
+      await this.createInstallationToken(installationId);
+    const repositoryPath = fullName
+      .split('/')
+      .map((part) => encodeURIComponent(part))
+      .join('/');
+
+    const [branches, commits] = await Promise.all([
+      this.request<GithubBranch[]>(
+        `/repos/${repositoryPath}/branches?per_page=100`,
+        installationToken.token,
+      ),
+      this.request<GithubCommit[]>(
+        `/repos/${repositoryPath}/commits?sha=${encodeURIComponent(defaultBranch)}&per_page=100`,
+        installationToken.token,
+      ),
+    ]);
+
+    return {
+      branches: branches.map((branch) => ({
+        name: branch.name,
+        sha: branch.commit.sha,
+        isDefault: branch.name === defaultBranch,
+      })),
+      commits: commits.map((commit) => ({
+        sha: commit.sha,
+        message: commit.commit.message,
+        authorName: commit.commit.author?.name ?? null,
+        authorEmail: commit.commit.author?.email ?? null,
+        committedAt: commit.commit.author?.date
+          ? new Date(commit.commit.author.date)
+          : commit.commit.committer?.date
+            ? new Date(commit.commit.committer.date)
+            : null,
+        url: commit.html_url,
+      })),
+    };
+  }
+
+  private createInstallationToken(installationId: string) {
+    return this.request<GithubInstallationToken>(
+      `/app/installations/${installationId}/access_tokens`,
+      this.createAppJwt(),
+      { method: 'POST' },
+    );
   }
 
   private signState(payload: SetupState) {

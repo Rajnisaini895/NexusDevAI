@@ -94,12 +94,51 @@ model Repository {
   workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   providerConnection ProviderConnection? @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
 
+  branches RepositoryBranch[]
+  commits  RepositoryCommit[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([workspaceId, fullName])
   @@index([workspaceId])
   @@index([providerConnectionId])
+}
+
+model RepositoryBranch {
+  id           String  @id @default(uuid())
+  repositoryId String
+  name         String
+  sha          String?
+  isDefault    Boolean @default(false)
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([repositoryId, name])
+  @@index([repositoryId])
+}
+
+model RepositoryCommit {
+  id           String    @id @default(uuid())
+  repositoryId String
+  sha          String
+  message      String?
+  authorName   String?
+  authorEmail  String?
+  committedAt  DateTime?
+  url          String?
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([repositoryId, sha])
+  @@index([repositoryId])
+  @@index([sha])
 }
 
 model ProviderConnection {
