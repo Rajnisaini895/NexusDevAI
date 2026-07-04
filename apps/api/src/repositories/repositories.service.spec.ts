@@ -13,6 +13,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { GithubAppService } from '../provider-connections/github-app.service';
+import { EmbeddingsService } from './embeddings.service';
+import { OllamaGenerationService } from './ollama-generation.service';
 import { RepositoriesService } from './repositories.service';
 
 describe('RepositoriesService', () => {
@@ -37,7 +39,15 @@ describe('RepositoriesService', () => {
     },
     repositoryFile: {
       deleteMany: jest.fn(),
+      findMany: jest.fn(),
       upsert: jest.fn(),
+    },
+    repositoryChunk: {
+      count: jest.fn(),
+      createMany: jest.fn(),
+      deleteMany: jest.fn(),
+      findMany: jest.fn(),
+      update: jest.fn(),
     },
     providerConnection: {
       findFirst: jest.fn(),
@@ -51,6 +61,16 @@ describe('RepositoriesService', () => {
     getRepositoryMetadata: jest.fn(),
     getRepositoryFiles: jest.fn(),
     listInstallationRepositories: jest.fn(),
+  };
+
+  const embeddingsService = {
+    model: 'embeddinggemma',
+    create: jest.fn(),
+  };
+
+  const ollamaGenerationService = {
+    model: 'qwen2.5-coder:3b',
+    answer: jest.fn(),
   };
 
   const repository = {
@@ -81,12 +101,21 @@ describe('RepositoriesService', () => {
     prisma.repositoryCommit.upsert.mockResolvedValue({});
     prisma.repositoryFile.deleteMany.mockResolvedValue({ count: 0 });
     prisma.repositoryFile.upsert.mockResolvedValue({});
+    prisma.repositoryChunk.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.repositoryChunk.createMany.mockResolvedValue({ count: 0 });
+    prisma.repositoryChunk.count.mockResolvedValue(0);
+    prisma.repositoryChunk.update.mockResolvedValue({});
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RepositoriesService,
         { provide: PrismaService, useValue: prisma },
         { provide: GithubAppService, useValue: githubAppService },
+        { provide: EmbeddingsService, useValue: embeddingsService },
+        {
+          provide: OllamaGenerationService,
+          useValue: ollamaGenerationService,
+        },
       ],
     }).compile();
 
@@ -224,6 +253,171 @@ describe('RepositoriesService', () => {
     expect(githubAppService.getRepositoryFiles).not.toHaveBeenCalled();
   });
 
+  it('builds overlapping line-aware chunks for changed files', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    prisma.repositoryFile.findMany.mockResolvedValue([
+      {
+        id: 'file-id',
+        repositoryId: 'repository-id',
+        sha: 'new-sha',
+        language: 'TypeScript',
+        content: Array.from(
+          { length: 100 },
+          (_, index) => `line ${index + 1}`,
+        ).join('\n'),
+        chunks: [{ sourceSha: 'old-sha' }],
+      },
+    ]);
+
+    await expect(
+      service.chunkFiles('user-id', 'workspace-id', 'repository-id'),
+    ).resolves.toEqual({
+      message: 'Repository chunks built successfully',
+      chunked: { filesProcessed: 1, filesUnchanged: 0, chunksCreated: 2 },
+    });
+
+    expect(prisma.repositoryChunk.deleteMany).toHaveBeenCalledWith({
+      where: { fileId: 'file-id' },
+    });
+    expect(prisma.repositoryChunk.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ chunkIndex: 0, startLine: 1, endLine: 80 }),
+        expect.objectContaining({ chunkIndex: 1, startLine: 66, endLine: 100 }),
+      ],
+    });
+  });
+
+  it('skips chunk rebuilding when the source SHA is unchanged', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    prisma.repositoryFile.findMany.mockResolvedValue([
+      {
+        id: 'file-id',
+        repositoryId: 'repository-id',
+        sha: 'same-sha',
+        language: 'TypeScript',
+        content: 'const ready = true;',
+        chunks: [{ sourceSha: 'same-sha' }],
+      },
+    ]);
+
+    await expect(
+      service.chunkFiles('user-id', 'workspace-id', 'repository-id'),
+    ).resolves.toEqual({
+      message: 'Repository chunks built successfully',
+      chunked: { filesProcessed: 0, filesUnchanged: 1, chunksCreated: 0 },
+    });
+
+    expect(prisma.repositoryChunk.createMany).not.toHaveBeenCalled();
+  });
+
+  it('creates embeddings only for repository chunks that need them', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    prisma.repositoryChunk.findMany.mockResolvedValue([
+      { id: 'chunk-1', content: 'authentication middleware' },
+      { id: 'chunk-2', content: 'workspace membership' },
+    ]);
+    embeddingsService.create.mockResolvedValue([
+      [1, 0],
+      [0, 1],
+    ]);
+    prisma.repositoryChunk.count.mockResolvedValue(5);
+
+    await expect(
+      service.embedChunks('user-id', 'workspace-id', 'repository-id'),
+    ).resolves.toEqual({
+      message: 'Repository chunks embedded successfully',
+      embedded: { created: 2, unchanged: 3 },
+    });
+
+    expect(embeddingsService.create).toHaveBeenCalledWith([
+      'authentication middleware',
+      'workspace membership',
+    ]);
+    expect(prisma.repositoryChunk.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('ranks embedded chunks by cosine similarity', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    embeddingsService.create.mockResolvedValue([[1, 0]]);
+    prisma.repositoryChunk.findMany.mockResolvedValue([
+      {
+        id: 'less-relevant',
+        chunkIndex: 0,
+        startLine: 1,
+        endLine: 20,
+        language: 'TypeScript',
+        content: 'workspace settings',
+        embedding: [0, 1],
+        file: { path: 'settings.ts' },
+      },
+      {
+        id: 'most-relevant',
+        chunkIndex: 1,
+        startLine: 21,
+        endLine: 40,
+        language: 'TypeScript',
+        content: 'login and sessions',
+        embedding: [1, 0],
+        file: { path: 'auth.ts' },
+      },
+    ]);
+
+    const result = await service.searchChunks(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+      { query: 'authentication', limit: 1 },
+    );
+
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        id: 'most-relevant',
+        path: 'auth.ts',
+        score: 1,
+      }),
+    ]);
+  });
+
+  it('answers a repository question using the highest-ranked chunks', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    embeddingsService.create.mockResolvedValue([[1, 0]]);
+    prisma.repositoryChunk.findMany.mockResolvedValue([
+      {
+        id: 'auth-chunk',
+        chunkIndex: 0,
+        startLine: 10,
+        endLine: 30,
+        language: 'TypeScript',
+        content: 'export class AuthService {}',
+        embedding: [1, 0],
+        file: { path: 'src/auth.service.ts' },
+      },
+    ]);
+    ollamaGenerationService.answer.mockResolvedValue({
+      answer: 'Authentication is handled by AuthService.',
+      model: 'qwen2.5-coder:3b',
+    });
+
+    await expect(
+      service.answerQuestion('user-id', 'workspace-id', 'repository-id', {
+        query: 'Where is authentication handled?',
+        limit: 8,
+      }),
+    ).resolves.toEqual({
+      question: 'Where is authentication handled?',
+      answer: 'Authentication is handled by AuthService.',
+      model: 'qwen2.5-coder:3b',
+      sources: [
+        expect.objectContaining({
+          id: 'auth-chunk',
+          path: 'src/auth.service.ts',
+          startLine: 10,
+          endLine: 30,
+        }),
+      ],
+    });
+  });
+
   it('allows a developer to add a repository to an authorized workspace', async () => {
     prisma.repository.create.mockResolvedValue(repository);
 
@@ -256,7 +450,7 @@ describe('RepositoriesService', () => {
         workspaceId: true,
         providerConnectionId: true,
         _count: {
-          select: { branches: true, commits: true, files: true },
+          select: { branches: true, commits: true, files: true, chunks: true },
         },
         createdAt: true,
         updatedAt: true,
@@ -300,7 +494,7 @@ describe('RepositoriesService', () => {
         workspaceId: true,
         providerConnectionId: true,
         _count: {
-          select: { branches: true, commits: true, files: true },
+          select: { branches: true, commits: true, files: true, chunks: true },
         },
         createdAt: true,
         updatedAt: true,

@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -10,17 +11,23 @@ import {
   Prisma,
   ProviderConnectionStatus,
 } from '@prisma/client';
+import { createHash } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { GithubAppService } from '../provider-connections/github-app.service';
 import { CreateRepositoryDto } from './dto/create-repository.dto';
 import { ImportRepositoryDto } from './dto/import-repository.dto';
+import { SearchRepositoryDto } from './dto/search-repository.dto';
+import { EmbeddingsService } from './embeddings.service';
+import { OllamaGenerationService } from './ollama-generation.service';
 
 @Injectable()
 export class RepositoriesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly githubAppService: GithubAppService,
+    private readonly embeddingsService: EmbeddingsService,
+    private readonly ollamaGenerationService: OllamaGenerationService,
   ) {}
 
   async create(
@@ -362,6 +369,272 @@ export class RepositoriesService {
     };
   }
 
+  async chunkFiles(userId: string, workspaceId: string, repositoryId: string) {
+    const membership = await this.findWorkspaceMembership(userId, workspaceId);
+
+    if (membership.role === MemberRole.VIEWER) {
+      throw new ForbiddenException('Viewers cannot build repository chunks');
+    }
+
+    const repository = await this.prisma.repository.findFirst({
+      where: { id: repositoryId, workspaceId },
+      select: { id: true },
+    });
+
+    if (!repository) throw new NotFoundException('Repository not found');
+
+    const files = await this.prisma.repositoryFile.findMany({
+      where: { repositoryId },
+      select: {
+        id: true,
+        repositoryId: true,
+        sha: true,
+        language: true,
+        content: true,
+        chunks: {
+          select: { sourceSha: true },
+          orderBy: { chunkIndex: 'asc' },
+          take: 1,
+        },
+      },
+      orderBy: { path: 'asc' },
+    });
+
+    let filesProcessed = 0;
+    let filesUnchanged = 0;
+    let chunksCreated = 0;
+
+    for (const file of files) {
+      if (file.chunks[0]?.sourceSha === file.sha) {
+        filesUnchanged += 1;
+        continue;
+      }
+
+      const chunks = this.createChunks(file.content).map((chunk) => ({
+        repositoryId: file.repositoryId,
+        fileId: file.id,
+        language: file.language,
+        sourceSha: file.sha,
+        ...chunk,
+      }));
+
+      await this.prisma.$transaction([
+        this.prisma.repositoryChunk.deleteMany({ where: { fileId: file.id } }),
+        this.prisma.repositoryChunk.createMany({ data: chunks }),
+      ]);
+      filesProcessed += 1;
+      chunksCreated += chunks.length;
+    }
+
+    return {
+      message: 'Repository chunks built successfully',
+      chunked: {
+        filesProcessed,
+        filesUnchanged,
+        chunksCreated,
+      },
+    };
+  }
+
+  async embedChunks(userId: string, workspaceId: string, repositoryId: string) {
+    const membership = await this.findWorkspaceMembership(userId, workspaceId);
+
+    if (membership.role === MemberRole.VIEWER) {
+      throw new ForbiddenException('Viewers cannot embed repository chunks');
+    }
+
+    const repository = await this.prisma.repository.findFirst({
+      where: { id: repositoryId, workspaceId },
+      select: { id: true },
+    });
+    if (!repository) throw new NotFoundException('Repository not found');
+
+    const chunks = await this.prisma.repositoryChunk.findMany({
+      where: {
+        repositoryId,
+        OR: [
+          { embedding: { isEmpty: true } },
+          { embeddingModel: { not: this.embeddingsService.model } },
+        ],
+      },
+      select: { id: true, content: true },
+      orderBy: [{ fileId: 'asc' }, { chunkIndex: 'asc' }],
+    });
+
+    const batchSize = 10;
+    let embedded = 0;
+    for (let start = 0; start < chunks.length; start += batchSize) {
+      const batch = chunks.slice(start, start + batchSize);
+      const vectors = await this.embeddingsService.create(
+        batch.map((chunk) => chunk.content),
+      );
+      const embeddedAt = new Date();
+
+      await this.prisma.$transaction(
+        batch.map((chunk, index) =>
+          this.prisma.repositoryChunk.update({
+            where: { id: chunk.id },
+            data: {
+              embedding: vectors[index],
+              embeddingModel: this.embeddingsService.model,
+              embeddedAt,
+            },
+          }),
+        ),
+      );
+      embedded += batch.length;
+    }
+
+    return {
+      message: 'Repository chunks embedded successfully',
+      embedded: {
+        created: embedded,
+        unchanged: (await this.countEmbedded(repositoryId)) - embedded,
+      },
+    };
+  }
+
+  async searchChunks(
+    userId: string,
+    workspaceId: string,
+    repositoryId: string,
+    searchRepositoryDto: SearchRepositoryDto,
+  ) {
+    await this.findWorkspaceMembership(userId, workspaceId);
+
+    const repository = await this.prisma.repository.findFirst({
+      where: { id: repositoryId, workspaceId },
+      select: { id: true },
+    });
+    if (!repository) throw new NotFoundException('Repository not found');
+
+    const [queryEmbedding] = await this.embeddingsService.create([
+      searchRepositoryDto.query.trim(),
+    ]);
+    const chunks = await this.prisma.repositoryChunk.findMany({
+      where: {
+        repositoryId,
+        embeddingModel: this.embeddingsService.model,
+        embedding: { isEmpty: false },
+      },
+      select: {
+        id: true,
+        chunkIndex: true,
+        startLine: true,
+        endLine: true,
+        language: true,
+        content: true,
+        embedding: true,
+        file: { select: { path: true } },
+      },
+    });
+
+    const results = chunks
+      .map(({ embedding, file, ...chunk }) => ({
+        ...chunk,
+        path: file.path,
+        score: this.cosineSimilarity(queryEmbedding, embedding),
+      }))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, searchRepositoryDto.limit);
+
+    return { query: searchRepositoryDto.query.trim(), results };
+  }
+
+  async answerQuestion(
+    userId: string,
+    workspaceId: string,
+    repositoryId: string,
+    searchRepositoryDto: SearchRepositoryDto,
+  ) {
+    const search = await this.searchChunks(userId, workspaceId, repositoryId, {
+      query: searchRepositoryDto.query,
+      limit: 6,
+    });
+
+    if (search.results.length === 0) {
+      throw new BadGatewayException(
+        'No embedded repository chunks are available for this question',
+      );
+    }
+
+    const generated = await this.ollamaGenerationService.answer(
+      search.query,
+      search.results,
+    );
+
+    return {
+      question: search.query,
+      ...generated,
+      sources: search.results.map(
+        ({ id, path, startLine, endLine, language, score }) => ({
+          id,
+          path,
+          startLine,
+          endLine,
+          language,
+          score,
+        }),
+      ),
+    };
+  }
+
+  private countEmbedded(repositoryId: string) {
+    return this.prisma.repositoryChunk.count({
+      where: {
+        repositoryId,
+        embeddingModel: this.embeddingsService.model,
+        embedding: { isEmpty: false },
+      },
+    });
+  }
+
+  private cosineSimilarity(left: number[], right: number[]) {
+    if (left.length !== right.length || left.length === 0) return 0;
+
+    let dotProduct = 0;
+    let leftMagnitude = 0;
+    let rightMagnitude = 0;
+    for (let index = 0; index < left.length; index += 1) {
+      dotProduct += left[index] * right[index];
+      leftMagnitude += left[index] ** 2;
+      rightMagnitude += right[index] ** 2;
+    }
+
+    const denominator = Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude);
+    return denominator === 0 ? 0 : dotProduct / denominator;
+  }
+
+  private createChunks(content: string) {
+    const lines = content.split(/\r?\n/);
+    const chunkSize = 80;
+    const overlap = 15;
+    const chunks: Array<{
+      chunkIndex: number;
+      startLine: number;
+      endLine: number;
+      contentHash: string;
+      content: string;
+    }> = [];
+
+    for (let start = 0; start < lines.length; start += chunkSize - overlap) {
+      const end = Math.min(start + chunkSize, lines.length);
+      const chunkContent = lines.slice(start, end).join('\n');
+      if (chunkContent.trim()) {
+        chunks.push({
+          chunkIndex: chunks.length,
+          startLine: start + 1,
+          endLine: end,
+          contentHash: createHash('sha256').update(chunkContent).digest('hex'),
+          content: chunkContent,
+        });
+      }
+      if (end === lines.length) break;
+    }
+
+    return chunks;
+  }
+
   private async findWorkspaceMembership(userId: string, workspaceId: string) {
     const workspace = await this.prisma.workspace.findFirst({
       where: {
@@ -403,7 +676,7 @@ export class RepositoriesService {
     workspaceId: true,
     providerConnectionId: true,
     _count: {
-      select: { branches: true, commits: true, files: true },
+      select: { branches: true, commits: true, files: true, chunks: true },
     },
     createdAt: true,
     updatedAt: true,

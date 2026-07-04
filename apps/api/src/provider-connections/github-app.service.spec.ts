@@ -54,7 +54,9 @@ describe('GithubAppService', () => {
   it('rejects a tampered setup state', () => {
     const result = service.createInstallUrl('organization-id', 'user-id');
     const state = new URL(result.installUrl).searchParams.get('state') ?? '';
-    const tamperedState = `${state.slice(0, -1)}x`;
+    const [payload, signature] = state.split('.');
+    const replacement = signature.startsWith('A') ? 'B' : 'A';
+    const tamperedState = `${payload}.${replacement}${signature.slice(1)}`;
 
     expect(() =>
       service.verifyState(tamperedState, 'organization-id', 'user-id'),

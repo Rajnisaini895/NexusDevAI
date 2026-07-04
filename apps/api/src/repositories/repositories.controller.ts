@@ -14,6 +14,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateRepositoryDto } from './dto/create-repository.dto';
 import { ImportRepositoryDto } from './dto/import-repository.dto';
+import { SearchRepositoryDto } from './dto/search-repository.dto';
 import { RepositoriesService } from './repositories.service';
 
 interface AuthenticatedRequest {
@@ -108,6 +109,70 @@ export class RepositoriesController {
       request.user.userId,
       workspaceId,
       repositoryId,
+    );
+  }
+
+  @Post(':repositoryId/chunk')
+  chunkFiles(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+  ) {
+    return this.repositoriesService.chunkFiles(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+    );
+  }
+
+  @Post(':repositoryId/embed')
+  embedChunks(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+  ) {
+    return this.repositoriesService.embedChunks(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+    );
+  }
+
+  @Post(':repositoryId/search')
+  searchChunks(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+    @Body() searchRepositoryDto: SearchRepositoryDto,
+  ) {
+    return this.repositoriesService.searchChunks(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+      searchRepositoryDto,
+    );
+  }
+
+  @Post(':repositoryId/ask')
+  answerQuestion(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+    @Body() searchRepositoryDto: SearchRepositoryDto,
+  ) {
+    return this.repositoriesService.answerQuestion(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+      searchRepositoryDto,
     );
   }
 

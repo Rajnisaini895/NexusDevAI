@@ -97,6 +97,7 @@ model Repository {
   branches RepositoryBranch[]
   commits  RepositoryCommit[]
   files    RepositoryFile[]
+  chunks   RepositoryChunk[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -151,7 +152,8 @@ model RepositoryFile {
   language     String?
   content      String  @db.Text
 
-  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  repository Repository        @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  chunks     RepositoryChunk[]
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -160,6 +162,34 @@ model RepositoryFile {
   @@unique([repositoryId, path])
   @@index([repositoryId])
   @@index([repositoryId, language])
+}
+
+model RepositoryChunk {
+  id             String    @id @default(uuid())
+  repositoryId   String
+  fileId         String
+  chunkIndex     Int
+  startLine      Int
+  endLine        Int
+  language       String?
+  sourceSha      String
+  contentHash    String
+  content        String    @db.Text
+  embedding      Float[]   @default([])
+  embeddingModel String?
+  embeddedAt     DateTime?
+
+  repository Repository     @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  file       RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([fileId, chunkIndex])
+  @@index([repositoryId])
+  @@index([fileId])
+  @@index([repositoryId, language])
+  @@index([contentHash])
 }
 
 model ProviderConnection {

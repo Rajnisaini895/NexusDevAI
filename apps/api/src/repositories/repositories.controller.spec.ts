@@ -14,6 +14,10 @@ describe('RepositoriesController', () => {
     remove: jest.fn(),
     synchronize: jest.fn(),
     ingestFiles: jest.fn(),
+    chunkFiles: jest.fn(),
+    embedChunks: jest.fn(),
+    searchChunks: jest.fn(),
+    answerQuestion: jest.fn(),
   };
 
   const request = {
@@ -105,6 +109,66 @@ describe('RepositoriesController', () => {
       'user-id',
       'workspace-id',
       'repository-id',
+    );
+  });
+
+  it('scopes chunk building to the authenticated user and workspace', async () => {
+    repositoriesService.chunkFiles.mockResolvedValue({
+      message: 'Repository chunks built successfully',
+    });
+
+    await controller.chunkFiles(request, 'workspace-id', 'repository-id');
+
+    expect(repositoriesService.chunkFiles).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+    );
+  });
+
+  it('scopes embedding generation to the authenticated user and workspace', async () => {
+    await controller.embedChunks(request, 'workspace-id', 'repository-id');
+
+    expect(repositoriesService.embedChunks).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+    );
+  });
+
+  it('scopes semantic search to the authenticated user and workspace', async () => {
+    const dto = { query: 'authentication', limit: 8 };
+
+    await controller.searchChunks(
+      request,
+      'workspace-id',
+      'repository-id',
+      dto,
+    );
+
+    expect(repositoriesService.searchChunks).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+      dto,
+    );
+  });
+
+  it('scopes repository questions to the authenticated user and workspace', async () => {
+    const dto = { query: 'Where is authentication handled?', limit: 8 };
+
+    await controller.answerQuestion(
+      request,
+      'workspace-id',
+      'repository-id',
+      dto,
+    );
+
+    expect(repositoriesService.answerQuestion).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+      dto,
     );
   });
 });

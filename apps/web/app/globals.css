@@ -48,8 +48,8 @@ select {
   justify-content: space-between;
   min-height: 100vh;
   padding: 48px clamp(44px, 7vw, 112px);
-  color: #f8faf7;
-  background: #173e31;
+  color: #c599e9;
+  background: #2d0549;
 }
 
 .brand-panel::before,
@@ -97,7 +97,7 @@ select {
   height: 38px;
   border-radius: 11px;
   color: var(--green-dark);
-  background: #c6e6d2;
+  background: #d4e67c;
   font-weight: 800;
 }
 .brand-copy {
@@ -243,7 +243,7 @@ input:focus {
   background: var(--green);
   cursor: pointer;
   font-weight: 800;
-  box-shadow: 0 8px 24px rgba(33, 98, 74, 0.18);
+  box-shadow: 0 8px 24px rgba(121, 105, 180, 0.18);
   transition:
     transform 0.2s,
     background 0.2s;
@@ -307,7 +307,7 @@ input:focus {
   justify-content: space-between;
   padding: 24px clamp(24px, 6vw, 84px);
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 252, 0.86);
+  background: rgba(252, 255, 253, 0.86);
 }
 .dashboard-brand {
   color: var(--ink);
@@ -394,7 +394,7 @@ input:focus {
   gap: 28px;
   padding: 48px 30px;
   border-right: 1px solid var(--line);
-  background: #f1f2ec;
+  background: #ffffff;
 }
 .workspace-sidebar h1 {
   margin: 0;
@@ -409,7 +409,7 @@ input:focus {
   border-radius: 10px;
   outline: none;
   color: var(--ink);
-  background: #fff;
+  background: #a8eabc;
 }
 .workspace-sidebar select:focus {
   border-color: #68a287;
@@ -421,7 +421,7 @@ input:focus {
   gap: 12px;
   margin-top: auto;
   padding: 16px;
-  border: 1px solid #d7ddd6;
+  border: 1px solid #264720;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.7);
 }
@@ -579,6 +579,100 @@ input:focus {
 .repo-actions {
   display: grid;
   gap: 8px;
+}
+.chunk-button,
+.embed-button {
+  padding: 10px 14px;
+  border: 1px solid #bdd1c5;
+  border-radius: 9px;
+  color: var(--green);
+  background: #0b554e;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+.chunk-button:hover:not(:disabled),
+.embed-button:hover:not(:disabled) {
+  background: var(--mint);
+}
+.chunk-button:disabled,
+.embed-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.semantic-search {
+  grid-column: 1 / -1;
+  padding-top: 4px;
+}
+.semantic-search form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.semantic-search input {
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  outline: none;
+}
+.semantic-search input:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(45, 105, 72, 0.1);
+}
+.semantic-search form button {
+  padding: 0 18px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--ink);
+  cursor: pointer;
+  font-weight: 800;
+}
+.semantic-search form button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.search-results {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+}
+.search-results article {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8faf8;
+}
+.search-results header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: #536159;
+  font-size: 12px;
+}
+.search-results header strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-results header span {
+  flex: 0 0 auto;
+}
+.search-results pre {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border-top: 1px solid var(--line);
+  color: #26372e;
+  background: #eef4f0;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 .ingest-button {
   padding: 10px 14px;
