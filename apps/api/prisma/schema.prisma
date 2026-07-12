@@ -39,6 +39,23 @@ enum CodeReviewSeverity {
   CRITICAL
 }
 
+enum RepositoryProcessingStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum RepositoryProcessingStage {
+  QUEUED
+  SYNCING
+  INGESTING
+  CHUNKING
+  EMBEDDING
+  COMPLETED
+  FAILED
+}
+
 model User {
   id           String     @id @default(uuid())
   email        String     @unique
@@ -101,12 +118,13 @@ model Repository {
   workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   providerConnection ProviderConnection? @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
 
-  branches   RepositoryBranch[]
-  commits    RepositoryCommit[]
-  files      RepositoryFile[]
-  chunks     RepositoryChunk[]
-  reviews    RepositoryCodeReview[]
-  reviewRuns RepositoryCodeReviewRun[]
+  branches       RepositoryBranch[]
+  commits        RepositoryCommit[]
+  files          RepositoryFile[]
+  chunks         RepositoryChunk[]
+  reviews        RepositoryCodeReview[]
+  reviewRuns     RepositoryCodeReviewRun[]
+  processingRuns RepositoryProcessingRun[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -114,6 +132,27 @@ model Repository {
   @@unique([workspaceId, fullName])
   @@index([workspaceId])
   @@index([providerConnectionId])
+}
+
+model RepositoryProcessingRun {
+  id                String                     @id @default(uuid())
+  repositoryId      String
+  workspaceId       String
+  requestedByUserId String
+  status            RepositoryProcessingStatus @default(QUEUED)
+  stage             RepositoryProcessingStage  @default(QUEUED)
+  progress          Int                        @default(0)
+  errorMessage      String?                    @db.Text
+  startedAt         DateTime?
+  completedAt       DateTime?
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([repositoryId, createdAt])
+  @@index([workspaceId, status])
 }
 
 model RepositoryCodeReviewRun {

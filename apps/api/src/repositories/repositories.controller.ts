@@ -17,6 +17,7 @@ import { ImportRepositoryDto } from './dto/import-repository.dto';
 import { ReviewRepositoryDto } from './dto/review-repository.dto';
 import { SearchRepositoryDto } from './dto/search-repository.dto';
 import { RepositoriesService } from './repositories.service';
+import { RepositoryProcessingService } from './repository-processing.service';
 
 interface AuthenticatedRequest {
   user: {
@@ -29,7 +30,10 @@ interface AuthenticatedRequest {
 @UseGuards(JwtAuthGuard)
 @Controller('workspaces/:workspaceId/repositories')
 export class RepositoriesController {
-  constructor(private readonly repositoriesService: RepositoriesService) {}
+  constructor(
+    private readonly repositoriesService: RepositoriesService,
+    private readonly repositoryProcessingService: RepositoryProcessingService,
+  ) {}
 
   @Post()
   create(
@@ -206,6 +210,36 @@ export class RepositoriesController {
       workspaceId,
       repositoryId,
       reviewRepositoryDto,
+    );
+  }
+
+  @Post(':repositoryId/process')
+  processRepository(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+  ) {
+    return this.repositoryProcessingService.enqueue(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+    );
+  }
+
+  @Get(':repositoryId/process/latest')
+  findLatestProcessingRun(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+  ) {
+    return this.repositoryProcessingService.findLatest(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
     );
   }
 

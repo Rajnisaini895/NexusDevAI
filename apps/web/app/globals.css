@@ -674,6 +674,72 @@ input:focus {
   display: grid;
   gap: 8px;
 }
+.prepare-button {
+  padding: 11px 14px;
+  border: 1px solid #5a3a7d;
+  border-radius: 9px;
+  color: #fff;
+  background: #4d276b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+}
+.prepare-button:hover:not(:disabled) {
+  background: #35164f;
+}
+.prepare-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.processing-status {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 7px;
+  padding: 11px 13px;
+  border: 1px solid #d7ded9;
+  border-radius: 10px;
+  background: #f6f8f6;
+}
+.processing-status > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #526159;
+  font-size: 11px;
+}
+.processing-status > div:first-child strong {
+  color: var(--ink);
+}
+.processing-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe5e0;
+}
+.processing-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 0.35s ease;
+}
+.processing-status.completed {
+  border-color: #b9d6c4;
+  background: #edf7f0;
+}
+.processing-status.failed {
+  border-color: #e5c4c0;
+  background: #fbefed;
+}
+.processing-status.failed .processing-track span {
+  background: #a6443f;
+}
+.processing-status p {
+  margin: 0;
+  color: #8d2e2e;
+  font-size: 11px;
+  line-height: 1.45;
+}
 .chunk-button,
 .embed-button {
   padding: 10px 14px;

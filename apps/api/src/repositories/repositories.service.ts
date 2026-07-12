@@ -812,6 +812,22 @@ export class RepositoriesService {
     isPrivate: true,
     workspaceId: true,
     providerConnectionId: true,
+    processingRuns: {
+      select: {
+        id: true,
+        repositoryId: true,
+        status: true,
+        stage: true,
+        progress: true,
+        errorMessage: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    },
     _count: {
       select: { branches: true, commits: true, files: true, chunks: true },
     },

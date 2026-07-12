@@ -6,10 +6,16 @@ import { RepositoriesController } from './repositories.controller';
 import { EmbeddingsService } from './embeddings.service';
 import { OllamaGenerationService } from './ollama-generation.service';
 import { RepositoriesService } from './repositories.service';
+import { RepositoryProcessingService } from './repository-processing.service';
 
 @Module({
   imports: [PrismaModule, ProviderConnectionsModule],
   controllers: [RepositoriesController],
-  providers: [RepositoriesService, EmbeddingsService, OllamaGenerationService],
+  providers: [
+    RepositoriesService,
+    RepositoryProcessingService,
+    EmbeddingsService,
+    OllamaGenerationService,
+  ],
 })
 export class RepositoriesModule {}

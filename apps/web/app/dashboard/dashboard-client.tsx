@@ -25,7 +25,36 @@ interface Repository {
   defaultBranch: string | null;
   url: string | null;
   isPrivate: boolean | null;
+  processingRuns: ProcessingRun[];
   _count: { branches: number; commits: number; files: number; chunks: number };
+}
+
+type ProcessingStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+type ProcessingStage =
+  | "QUEUED"
+  | "SYNCING"
+  | "INGESTING"
+  | "CHUNKING"
+  | "EMBEDDING"
+  | "COMPLETED"
+  | "FAILED";
+
+interface ProcessingRun {
+  id: string;
+  repositoryId: string;
+  status: ProcessingStatus;
+  stage: ProcessingStage;
+  progress: number;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProcessingResponse {
+  message?: string;
+  run?: ProcessingRun | null;
 }
 
 interface Connection {
@@ -132,6 +161,20 @@ const githubErrors: Record<string, string> = {
   "connection-failed": "GitHub connection could not be completed.",
 };
 
+const processingStageLabels: Record<ProcessingStage, string> = {
+  QUEUED: "Waiting for worker",
+  SYNCING: "Synchronizing metadata",
+  INGESTING: "Indexing source files",
+  CHUNKING: "Building code chunks",
+  EMBEDDING: "Creating embeddings",
+  COMPLETED: "Ready for AI",
+  FAILED: "Processing failed",
+};
+
+function isProcessingActive(run: ProcessingRun) {
+  return run.status === "QUEUED" || run.status === "RUNNING";
+}
+
 export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
   const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -164,6 +207,9 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
   const [importingRepositoryId, setImportingRepositoryId] = useState<
     string | null
   >(null);
+  const [processingRuns, setProcessingRuns] = useState<
+    Record<string, ProcessingRun>
+  >({});
 
   const loadDashboard = useCallback(
     async (organizationId?: string, workspaceId?: string) => {
@@ -190,6 +236,14 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
           return;
         }
         setData(result);
+        setProcessingRuns(
+          Object.fromEntries(
+            result.repositories.flatMap((repository) => {
+              const run = repository.processingRuns[0];
+              return run ? [[repository.id, run]] : [];
+            }),
+          ),
+        );
       } catch {
         setError("Unable to reach the dashboard service.");
       } finally {
@@ -203,6 +257,69 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
     const timer = window.setTimeout(() => void loadDashboard(), 0);
     return () => window.clearTimeout(timer);
   }, [loadDashboard]);
+
+  const activeProcessingKey = Object.entries(processingRuns)
+    .filter(([, run]) => isProcessingActive(run))
+    .map(([repositoryId]) => repositoryId)
+    .sort()
+    .join(",");
+
+  useEffect(() => {
+    const workspaceId = data?.selectedWorkspaceId;
+    if (!activeProcessingKey || !workspaceId) return;
+    const selectedWorkspaceId = workspaceId;
+    const repositoryIds = activeProcessingKey.split(",");
+    let cancelled = false;
+
+    async function refreshProcessingRuns() {
+      const updates = await Promise.all(
+        repositoryIds.map(async (repositoryId) => {
+          const query = new URLSearchParams({
+            workspaceId: selectedWorkspaceId,
+          });
+          const response = await fetch(
+            `/api/repositories/${repositoryId}/process?${query.toString()}`,
+            { cache: "no-store" },
+          );
+          if (response.status === 401) {
+            router.replace("/");
+            router.refresh();
+            return null;
+          }
+          if (!response.ok) return null;
+          const result = (await response.json()) as ProcessingResponse;
+          return result.run ? ([repositoryId, result.run] as const) : null;
+        }),
+      );
+      if (cancelled) return;
+
+      const validUpdates = updates.filter(
+        (update): update is readonly [string, ProcessingRun] => update !== null,
+      );
+      if (validUpdates.length) {
+        setProcessingRuns((current) => ({
+          ...current,
+          ...Object.fromEntries(validUpdates),
+        }));
+      }
+      if (validUpdates.some(([, run]) => run.status === "COMPLETED")) {
+        await loadDashboard(
+          data?.selectedOrganizationId ?? undefined,
+          selectedWorkspaceId,
+        );
+      }
+    }
+
+    void refreshProcessingRuns();
+    const interval = window.setInterval(
+      () => void refreshProcessingRuns(),
+      1500,
+    );
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeProcessingKey, data, loadDashboard, router]);
 
   async function synchronize(repository: Repository) {
     if (!data?.selectedWorkspaceId) return;
@@ -539,6 +656,36 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
     }
   }
 
+  async function prepareRepository(repository: Repository) {
+    if (!data?.selectedWorkspaceId) return;
+    setNotice("");
+    setError("");
+
+    try {
+      const response = await fetch(
+        `/api/repositories/${repository.id}/process`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspaceId: data.selectedWorkspaceId }),
+        },
+      );
+      if (handleUnauthorized(response)) return;
+      const result = (await response.json()) as ProcessingResponse;
+      if (!response.ok || !result.run) {
+        setError(result.message ?? "Repository processing could not start");
+        return;
+      }
+      setProcessingRuns((current) => ({
+        ...current,
+        [repository.id]: result.run!,
+      }));
+      setNotice(`${repository.name} is being prepared for AI.`);
+    } catch {
+      setError("Unable to reach the repository processing service.");
+    }
+  }
+
   const activeConnection = data?.connections.find(
     (connection) => connection.status === "ACTIVE",
   );
@@ -748,193 +895,244 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
             </div>
           ) : data?.repositories.length ? (
             <div className="repository-list">
-              {data.repositories.map((repository) => (
-                <article className="repository-row" key={repository.id}>
-                  <div className="repo-icon">⌘</div>
-                  <div className="repo-main">
-                    <div className="repo-title">
-                      {repository.url ? (
-                        <a
-                          href={repository.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {repository.name}
-                        </a>
-                      ) : (
-                        repository.name
-                      )}
-                      <span>{repository.isPrivate ? "Private" : "Public"}</span>
+              {data.repositories.map((repository) => {
+                const processingRun =
+                  processingRuns[repository.id] ?? repository.processingRuns[0];
+                const processingActive =
+                  processingRun && isProcessingActive(processingRun);
+
+                return (
+                  <article className="repository-row" key={repository.id}>
+                    <div className="repo-icon">⌘</div>
+                    <div className="repo-main">
+                      <div className="repo-title">
+                        {repository.url ? (
+                          <a
+                            href={repository.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {repository.name}
+                          </a>
+                        ) : (
+                          repository.name
+                        )}
+                        <span>
+                          {repository.isPrivate ? "Private" : "Public"}
+                        </span>
+                      </div>
+                      <p>{repository.fullName}</p>
+                      <div className="repo-metrics">
+                        <span>
+                          {repository.defaultBranch ?? "No default branch"}
+                        </span>
+                        <span>{repository._count.branches} branches</span>
+                        <span>{repository._count.commits} commits</span>
+                        <span>{repository._count.files} files</span>
+                        <span>{repository._count.chunks} chunks</span>
+                      </div>
                     </div>
-                    <p>{repository.fullName}</p>
-                    <div className="repo-metrics">
-                      <span>
-                        {repository.defaultBranch ?? "No default branch"}
-                      </span>
-                      <span>{repository._count.branches} branches</span>
-                      <span>{repository._count.commits} commits</span>
-                      <span>{repository._count.files} files</span>
-                      <span>{repository._count.chunks} chunks</span>
-                    </div>
-                  </div>
-                  <div className="repo-actions">
-                    <button
-                      className="sync-button"
-                      type="button"
-                      disabled={
-                        syncingId === repository.id ||
-                        ingestingId === repository.id ||
-                        chunkingId === repository.id ||
-                        embeddingId === repository.id
-                      }
-                      onClick={() => void synchronize(repository)}
-                    >
-                      {syncingId === repository.id
-                        ? "Syncing…"
-                        : "Sync metadata"}
-                    </button>
-                    <button
-                      className="ingest-button"
-                      type="button"
-                      disabled={
-                        ingestingId === repository.id ||
-                        syncingId === repository.id ||
-                        chunkingId === repository.id ||
-                        embeddingId === repository.id
-                      }
-                      onClick={() => void ingest(repository)}
-                    >
-                      {ingestingId === repository.id
-                        ? "Indexing…"
-                        : "Index files"}
-                    </button>
-                    <button
-                      className="chunk-button"
-                      type="button"
-                      disabled={
-                        chunkingId === repository.id ||
-                        syncingId === repository.id ||
-                        ingestingId === repository.id ||
-                        embeddingId === repository.id ||
-                        repository._count.files === 0
-                      }
-                      onClick={() => void buildChunks(repository)}
-                    >
-                      {chunkingId === repository.id
-                        ? "Chunking…"
-                        : "Build chunks"}
-                    </button>
-                    <button
-                      className="embed-button"
-                      type="button"
-                      disabled={
-                        embeddingId === repository.id ||
-                        syncingId === repository.id ||
-                        ingestingId === repository.id ||
-                        chunkingId === repository.id ||
-                        repository._count.chunks === 0
-                      }
-                      onClick={() => void createEmbeddings(repository)}
-                    >
-                      {embeddingId === repository.id
-                        ? "Embedding…"
-                        : "Create embeddings"}
-                    </button>
-                  </div>
-                  <div className="semantic-search">
-                    <form
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void askQuestion(repository);
-                      }}
-                    >
-                      <input
-                        type="search"
-                        value={searchQueries[repository.id] ?? ""}
-                        minLength={2}
-                        maxLength={1000}
-                        placeholder="Search this codebase by meaning…"
-                        onChange={(event) =>
-                          setSearchQueries((current) => ({
-                            ...current,
-                            [repository.id]: event.target.value,
-                          }))
-                        }
-                      />
+                    <div className="repo-actions">
                       <button
-                        className="search-button"
+                        className="prepare-button"
+                        type="button"
+                        disabled={Boolean(processingActive)}
+                        onClick={() => void prepareRepository(repository)}
+                      >
+                        {processingActive
+                          ? "Preparing…"
+                          : processingRun?.status === "FAILED"
+                            ? "Retry preparation"
+                            : processingRun?.status === "COMPLETED"
+                              ? "Re-prepare for AI"
+                              : "Prepare for AI"}
+                      </button>
+                      <button
+                        className="sync-button"
                         type="button"
                         disabled={
-                          searchingId === repository.id ||
-                          answeringId === repository.id ||
-                          !(searchQueries[repository.id] ?? "").trim()
+                          Boolean(processingActive) ||
+                          syncingId === repository.id ||
+                          ingestingId === repository.id ||
+                          chunkingId === repository.id ||
+                          embeddingId === repository.id
                         }
-                        onClick={() => void semanticSearch(repository)}
+                        onClick={() => void synchronize(repository)}
                       >
-                        {searchingId === repository.id
-                          ? "Searching…"
-                          : "Search"}
+                        {syncingId === repository.id
+                          ? "Syncing…"
+                          : "Sync metadata"}
                       </button>
                       <button
-                        className="ask-button"
-                        type="submit"
+                        className="ingest-button"
+                        type="button"
                         disabled={
-                          answeringId === repository.id ||
-                          searchingId === repository.id ||
-                          !(searchQueries[repository.id] ?? "").trim()
+                          Boolean(processingActive) ||
+                          ingestingId === repository.id ||
+                          syncingId === repository.id ||
+                          chunkingId === repository.id ||
+                          embeddingId === repository.id
                         }
+                        onClick={() => void ingest(repository)}
                       >
-                        {answeringId === repository.id ? "Thinking…" : "Ask AI"}
+                        {ingestingId === repository.id
+                          ? "Indexing…"
+                          : "Index files"}
                       </button>
-                    </form>
-                    {answers[repository.id]?.answer && (
-                      <section className="ai-answer">
-                        <div className="ai-answer-heading">
-                          <strong>Repository answer</strong>
-                          <span>{answers[repository.id].model}</span>
+                      <button
+                        className="chunk-button"
+                        type="button"
+                        disabled={
+                          Boolean(processingActive) ||
+                          chunkingId === repository.id ||
+                          syncingId === repository.id ||
+                          ingestingId === repository.id ||
+                          embeddingId === repository.id ||
+                          repository._count.files === 0
+                        }
+                        onClick={() => void buildChunks(repository)}
+                      >
+                        {chunkingId === repository.id
+                          ? "Chunking…"
+                          : "Build chunks"}
+                      </button>
+                      <button
+                        className="embed-button"
+                        type="button"
+                        disabled={
+                          Boolean(processingActive) ||
+                          embeddingId === repository.id ||
+                          syncingId === repository.id ||
+                          ingestingId === repository.id ||
+                          chunkingId === repository.id ||
+                          repository._count.chunks === 0
+                        }
+                        onClick={() => void createEmbeddings(repository)}
+                      >
+                        {embeddingId === repository.id
+                          ? "Embedding…"
+                          : "Create embeddings"}
+                      </button>
+                    </div>
+                    {processingRun && (
+                      <div
+                        className={`processing-status ${processingRun.status.toLowerCase()}`}
+                        role="status"
+                      >
+                        <div>
+                          <strong>
+                            {processingStageLabels[processingRun.stage]}
+                          </strong>
+                          <span>{processingRun.progress}%</span>
                         </div>
-                        <p>{answers[repository.id].answer}</p>
-                        <div className="answer-sources">
-                          {answers[repository.id].sources?.map((source) => (
-                            <span key={source.id}>
-                              {source.path}:{source.startLine}–{source.endLine}
-                            </span>
-                          ))}
+                        <div className="processing-track" aria-hidden="true">
+                          <span
+                            style={{ width: `${processingRun.progress}%` }}
+                          />
                         </div>
-                      </section>
-                    )}
-                    {searchResults[repository.id] && (
-                      <div className="search-results">
-                        {searchResults[repository.id].length ? (
-                          searchResults[repository.id].map((result) => (
-                            <article key={result.id}>
-                              <header>
-                                <strong>{result.path}</strong>
-                                <span>
-                                  lines {result.startLine}–{result.endLine} ·{" "}
-                                  {Math.round(result.score * 100)}% match
-                                </span>
-                              </header>
-                              <pre>
-                                <code>{result.content}</code>
-                              </pre>
-                            </article>
-                          ))
-                        ) : (
-                          <p>No embedded code matched this query.</p>
+                        {processingRun.errorMessage && (
+                          <p>{processingRun.errorMessage}</p>
                         )}
                       </div>
                     )}
-                  </div>
-                  {data.selectedWorkspaceId && (
-                    <CodeReviewPanel
-                      repositoryId={repository.id}
-                      workspaceId={data.selectedWorkspaceId}
-                      chunkCount={repository._count.chunks}
-                    />
-                  )}
-                </article>
-              ))}
+                    <div className="semantic-search">
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void askQuestion(repository);
+                        }}
+                      >
+                        <input
+                          type="search"
+                          value={searchQueries[repository.id] ?? ""}
+                          minLength={2}
+                          maxLength={1000}
+                          placeholder="Search this codebase by meaning…"
+                          onChange={(event) =>
+                            setSearchQueries((current) => ({
+                              ...current,
+                              [repository.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          className="search-button"
+                          type="button"
+                          disabled={
+                            searchingId === repository.id ||
+                            answeringId === repository.id ||
+                            !(searchQueries[repository.id] ?? "").trim()
+                          }
+                          onClick={() => void semanticSearch(repository)}
+                        >
+                          {searchingId === repository.id
+                            ? "Searching…"
+                            : "Search"}
+                        </button>
+                        <button
+                          className="ask-button"
+                          type="submit"
+                          disabled={
+                            answeringId === repository.id ||
+                            searchingId === repository.id ||
+                            !(searchQueries[repository.id] ?? "").trim()
+                          }
+                        >
+                          {answeringId === repository.id
+                            ? "Thinking…"
+                            : "Ask AI"}
+                        </button>
+                      </form>
+                      {answers[repository.id]?.answer && (
+                        <section className="ai-answer">
+                          <div className="ai-answer-heading">
+                            <strong>Repository answer</strong>
+                            <span>{answers[repository.id].model}</span>
+                          </div>
+                          <p>{answers[repository.id].answer}</p>
+                          <div className="answer-sources">
+                            {answers[repository.id].sources?.map((source) => (
+                              <span key={source.id}>
+                                {source.path}:{source.startLine}–
+                                {source.endLine}
+                              </span>
+                            ))}
+                          </div>
+                        </section>
+                      )}
+                      {searchResults[repository.id] && (
+                        <div className="search-results">
+                          {searchResults[repository.id].length ? (
+                            searchResults[repository.id].map((result) => (
+                              <article key={result.id}>
+                                <header>
+                                  <strong>{result.path}</strong>
+                                  <span>
+                                    lines {result.startLine}–{result.endLine} ·{" "}
+                                    {Math.round(result.score * 100)}% match
+                                  </span>
+                                </header>
+                                <pre>
+                                  <code>{result.content}</code>
+                                </pre>
+                              </article>
+                            ))
+                          ) : (
+                            <p>No embedded code matched this query.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {data.selectedWorkspaceId && (
+                      <CodeReviewPanel
+                        repositoryId={repository.id}
+                        workspaceId={data.selectedWorkspaceId}
+                        chunkCount={repository._count.chunks}
+                      />
+                    )}
+                  </article>
+                );
+              })}
             </div>
           ) : (
             <div className="empty-state">

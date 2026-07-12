@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 
 import { RepositoriesController } from './repositories.controller';
 import { RepositoriesService } from './repositories.service';
+import { RepositoryProcessingService } from './repository-processing.service';
 
 describe('RepositoriesController', () => {
   let controller: RepositoriesController;
@@ -21,6 +22,10 @@ describe('RepositoriesController', () => {
     findReviews: jest.fn(),
     reviewRepository: jest.fn(),
   };
+  const repositoryProcessingService = {
+    enqueue: jest.fn(),
+    findLatest: jest.fn(),
+  };
 
   const request = {
     user: { userId: 'user-id', email: 'developer@nexusdev.ai' },
@@ -33,6 +38,10 @@ describe('RepositoriesController', () => {
       controllers: [RepositoriesController],
       providers: [
         { provide: RepositoriesService, useValue: repositoriesService },
+        {
+          provide: RepositoryProcessingService,
+          useValue: repositoryProcessingService,
+        },
       ],
     }).compile();
 
@@ -199,6 +208,34 @@ describe('RepositoriesController', () => {
       'workspace-id',
       'repository-id',
       dto,
+    );
+  });
+
+  it('scopes repository processing to the authenticated user and workspace', async () => {
+    await controller.processRepository(
+      request,
+      'workspace-id',
+      'repository-id',
+    );
+
+    expect(repositoryProcessingService.enqueue).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+    );
+  });
+
+  it('scopes processing status to the authenticated user and workspace', async () => {
+    await controller.findLatestProcessingRun(
+      request,
+      'workspace-id',
+      'repository-id',
+    );
+
+    expect(repositoryProcessingService.findLatest).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
     );
   });
 });
