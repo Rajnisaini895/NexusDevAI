@@ -477,6 +477,100 @@ input:focus {
   font-size: 12px;
   font-weight: 750;
 }
+.github-onboarding {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 22px;
+  padding: 20px 22px;
+  border: 1px solid #bed4c6;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #eef7f1, #f9fbf9);
+}
+.github-onboarding .eyebrow {
+  margin-bottom: 7px;
+}
+.github-onboarding h3 {
+  margin: 0;
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 23px;
+  font-weight: 500;
+}
+.github-onboarding > div > p:last-child {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.github-onboarding > button,
+.github-repository-picker button {
+  padding: 10px 14px;
+  border: 1px solid var(--green);
+  border-radius: 9px;
+  color: #fff;
+  background: var(--green);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+.github-onboarding button:hover:not(:disabled) {
+  background: var(--green-dark);
+}
+.github-onboarding button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.github-permission-note {
+  grid-column: 1 / -1;
+  margin: -7px 0 0;
+  color: #856b2f;
+  font-size: 12px;
+}
+.github-repository-picker {
+  grid-column: 1 / -1;
+  display: grid;
+  max-height: 340px;
+  overflow-y: auto;
+  border-top: 1px solid #cfddd4;
+}
+.github-repository-picker > p {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.github-repository-picker article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 0;
+  border-bottom: 1px solid #dce6df;
+}
+.github-repository-picker article:last-child {
+  border-bottom: 0;
+}
+.github-repository-picker article > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.github-repository-picker strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.github-repository-picker span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.github-repository-picker button {
+  flex: 0 0 auto;
+  padding: 8px 13px;
+}
 .repository-list {
   display: grid;
   gap: 12px;
@@ -902,6 +996,12 @@ input:focus {
   .repository-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .github-onboarding {
+    grid-template-columns: 1fr;
+  }
+  .github-onboarding > button {
+    width: 100%;
   }
   .repository-row {
     grid-template-columns: auto minmax(0, 1fr);

@@ -2,8 +2,13 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { DashboardClient } from "./dashboard-client";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ github?: string }>;
+}) {
   const cookieStore = await cookies();
+  const { github } = await searchParams;
 
   if (
     !cookieStore.has("nexus_access_token") &&
@@ -12,5 +17,5 @@ export default async function DashboardPage() {
     redirect("/");
   }
 
-  return <DashboardClient />;
+  return <DashboardClient githubStatus={github} />;
 }

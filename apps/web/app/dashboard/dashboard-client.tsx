@@ -19,6 +19,7 @@ interface Workspace {
 
 interface Repository {
   id: string;
+  externalId: string | null;
   name: string;
   fullName: string;
   defaultBranch: string | null;
@@ -96,10 +97,47 @@ interface AnswerResponse {
   }>;
 }
 
-export function DashboardClient() {
+interface GithubRepository {
+  externalId: string;
+  name: string;
+  fullName: string;
+  defaultBranch: string;
+  private: boolean;
+  url: string;
+}
+
+interface GithubRepositoriesResponse {
+  message?: string;
+  repositories?: GithubRepository[];
+}
+
+interface GithubInstallResponse {
+  message?: string;
+  installUrl?: string;
+}
+
+interface ImportResponse {
+  message?: string;
+  repository?: Repository;
+}
+
+const githubNotices: Record<string, string> = {
+  connected: "GitHub connected. You can now import repositories.",
+  cancelled: "GitHub connection was cancelled.",
+};
+
+const githubErrors: Record<string, string> = {
+  "invalid-callback": "GitHub returned an invalid installation callback.",
+  "session-expired": "Your session expired while connecting GitHub.",
+  "connection-failed": "GitHub connection could not be completed.",
+};
+
+export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
   const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(
+    () => githubErrors[githubStatus ?? ""] ?? "",
+  );
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [ingestingId, setIngestingId] = useState<string | null>(null);
@@ -114,7 +152,18 @@ export function DashboardClient() {
     Record<string, SearchResult[]>
   >({});
   const [answers, setAnswers] = useState<Record<string, AnswerResponse>>({});
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(
+    () => githubNotices[githubStatus ?? ""] ?? "",
+  );
+  const [connectingGithub, setConnectingGithub] = useState(false);
+  const [repositoryPickerOpen, setRepositoryPickerOpen] = useState(false);
+  const [discoveringRepositories, setDiscoveringRepositories] = useState(false);
+  const [availableRepositories, setAvailableRepositories] = useState<
+    GithubRepository[] | null
+  >(null);
+  const [importingRepositoryId, setImportingRepositoryId] = useState<
+    string | null
+  >(null);
 
   const loadDashboard = useCallback(
     async (organizationId?: string, workspaceId?: string) => {
@@ -378,9 +427,136 @@ export function DashboardClient() {
     }
   }
 
+  function handleUnauthorized(response: Response) {
+    if (response.status !== 401) return false;
+    router.replace("/");
+    router.refresh();
+    return true;
+  }
+
+  async function connectGithub() {
+    if (!data?.selectedOrganizationId) return;
+    setConnectingGithub(true);
+    setNotice("");
+    setError("");
+
+    try {
+      const query = new URLSearchParams({
+        organizationId: data.selectedOrganizationId,
+      });
+      const response = await fetch(
+        `/api/provider-connections/github/install-url?${query.toString()}`,
+        { cache: "no-store" },
+      );
+      if (handleUnauthorized(response)) return;
+      const result = (await response.json()) as GithubInstallResponse;
+      if (!response.ok || !result.installUrl) {
+        setError(result.message ?? "Unable to start GitHub connection");
+        return;
+      }
+      window.location.assign(result.installUrl);
+    } catch {
+      setError("Unable to reach the GitHub connection service.");
+    } finally {
+      setConnectingGithub(false);
+    }
+  }
+
+  async function toggleRepositoryPicker() {
+    const nextOpen = !repositoryPickerOpen;
+    setRepositoryPickerOpen(nextOpen);
+    if (
+      !nextOpen ||
+      availableRepositories ||
+      !data?.selectedOrganizationId ||
+      !activeConnection
+    ) {
+      return;
+    }
+
+    setDiscoveringRepositories(true);
+    setNotice("");
+    setError("");
+    try {
+      const query = new URLSearchParams({
+        organizationId: data.selectedOrganizationId,
+      });
+      const response = await fetch(
+        `/api/provider-connections/${activeConnection.id}/repositories?${query.toString()}`,
+        { cache: "no-store" },
+      );
+      if (handleUnauthorized(response)) return;
+      const result = (await response.json()) as GithubRepositoriesResponse;
+      if (!response.ok) {
+        setError(result.message ?? "Unable to discover GitHub repositories");
+        return;
+      }
+      setAvailableRepositories(result.repositories ?? []);
+    } catch {
+      setError("Unable to reach GitHub repository discovery.");
+    } finally {
+      setDiscoveringRepositories(false);
+    }
+  }
+
+  async function importRepository(repository: GithubRepository) {
+    if (!data?.selectedWorkspaceId || !activeConnection) return;
+    setImportingRepositoryId(repository.externalId);
+    setNotice("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/repositories/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: data.selectedWorkspaceId,
+          connectionId: activeConnection.id,
+          externalRepositoryId: repository.externalId,
+        }),
+      });
+      if (handleUnauthorized(response)) return;
+      const result = (await response.json()) as ImportResponse;
+      if (!response.ok) {
+        setError(result.message ?? "Repository import failed");
+        return;
+      }
+      setNotice(`${repository.fullName} imported successfully.`);
+      setAvailableRepositories(
+        (current) =>
+          current?.filter(
+            (candidate) => candidate.externalId !== repository.externalId,
+          ) ?? null,
+      );
+      await loadDashboard(
+        data.selectedOrganizationId ?? undefined,
+        data.selectedWorkspaceId,
+      );
+    } catch {
+      setError("Unable to reach the repository import service.");
+    } finally {
+      setImportingRepositoryId(null);
+    }
+  }
+
   const activeConnection = data?.connections.find(
     (connection) => connection.status === "ACTIVE",
   );
+  const selectedOrganization = data?.organizations.find(
+    (organization) => organization.id === data.selectedOrganizationId,
+  );
+  const canManageConnections =
+    selectedOrganization?.role === "OWNER" ||
+    selectedOrganization?.role === "ADMIN";
+  const importedExternalIds = new Set(
+    data?.repositories
+      .map((repository) => repository.externalId)
+      .filter((externalId): externalId is string => Boolean(externalId)) ?? [],
+  );
+  const importableRepositories =
+    availableRepositories?.filter(
+      (repository) => !importedExternalIds.has(repository.externalId),
+    ) ?? [];
 
   return (
     <main className="dashboard-shell">
@@ -408,7 +584,11 @@ export function DashboardClient() {
             <select
               value={data?.selectedOrganizationId ?? ""}
               disabled={loading || !data?.organizations.length}
-              onChange={(event) => void loadDashboard(event.target.value)}
+              onChange={(event) => {
+                setRepositoryPickerOpen(false);
+                setAvailableRepositories(null);
+                void loadDashboard(event.target.value);
+              }}
             >
               {!data?.organizations.length && <option>No organizations</option>}
               {data?.organizations.map((organization) => (
@@ -424,12 +604,14 @@ export function DashboardClient() {
             <select
               value={data?.selectedWorkspaceId ?? ""}
               disabled={loading || !data?.workspaces.length}
-              onChange={(event) =>
+              onChange={(event) => {
+                setRepositoryPickerOpen(false);
+                setAvailableRepositories(null);
                 void loadDashboard(
                   data?.selectedOrganizationId ?? undefined,
                   event.target.value,
-                )
-              }
+                );
+              }}
             >
               {!data?.workspaces.length && <option>No workspaces</option>}
               {data?.workspaces.map((workspace) => (
@@ -473,6 +655,92 @@ export function DashboardClient() {
             </p>
           )}
           {notice && <p className="dashboard-alert success">{notice}</p>}
+
+          <section className="github-onboarding">
+            <div>
+              <p className="eyebrow">
+                {activeConnection ? "GitHub connected" : "Connect source code"}
+              </p>
+              <h3>
+                {activeConnection
+                  ? `Import from @${activeConnection.accountLogin}`
+                  : "Connect your GitHub App"}
+              </h3>
+              <p>
+                {activeConnection
+                  ? "Choose an installation repository and add it to this workspace."
+                  : "Authorize repository access without storing a personal access token."}
+              </p>
+            </div>
+            {activeConnection ? (
+              <button
+                type="button"
+                disabled={!data?.selectedWorkspaceId || discoveringRepositories}
+                onClick={() => void toggleRepositoryPicker()}
+              >
+                {discoveringRepositories
+                  ? "Loading repositories…"
+                  : repositoryPickerOpen
+                    ? "Close repository picker"
+                    : "Import repository"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={
+                  connectingGithub ||
+                  !data?.selectedOrganizationId ||
+                  !canManageConnections
+                }
+                onClick={() => void connectGithub()}
+              >
+                {connectingGithub ? "Opening GitHub…" : "Connect GitHub"}
+              </button>
+            )}
+
+            {!activeConnection &&
+              !canManageConnections &&
+              selectedOrganization && (
+                <p className="github-permission-note">
+                  An organization owner or admin must connect GitHub.
+                </p>
+              )}
+
+            {activeConnection && repositoryPickerOpen && (
+              <div className="github-repository-picker">
+                {discoveringRepositories ? (
+                  <p>Loading repositories available to this installation…</p>
+                ) : importableRepositories.length ? (
+                  importableRepositories.map((repository) => (
+                    <article key={repository.externalId}>
+                      <div>
+                        <strong>{repository.fullName}</strong>
+                        <span>
+                          {repository.private ? "Private" : "Public"} ·{" "}
+                          {repository.defaultBranch}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={importingRepositoryId !== null}
+                        onClick={() => void importRepository(repository)}
+                      >
+                        {importingRepositoryId === repository.externalId
+                          ? "Importing…"
+                          : "Import"}
+                      </button>
+                    </article>
+                  ))
+                ) : (
+                  <p>
+                    {availableRepositories
+                      ? "Every available repository is already imported."
+                      : "Open the picker to discover repositories."}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
 
           {loading && !data ? (
             <div className="empty-state">
