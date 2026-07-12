@@ -18,6 +18,8 @@ describe('RepositoriesController', () => {
     embedChunks: jest.fn(),
     searchChunks: jest.fn(),
     answerQuestion: jest.fn(),
+    findReviews: jest.fn(),
+    reviewRepository: jest.fn(),
   };
 
   const request = {
@@ -165,6 +167,34 @@ describe('RepositoriesController', () => {
     );
 
     expect(repositoriesService.answerQuestion).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+      dto,
+    );
+  });
+
+  it('scopes saved reviews to the authenticated user and workspace', async () => {
+    await controller.findReviews(request, 'workspace-id', 'repository-id');
+
+    expect(repositoriesService.findReviews).toHaveBeenCalledWith(
+      'user-id',
+      'workspace-id',
+      'repository-id',
+    );
+  });
+
+  it('scopes review runs to the authenticated user and workspace', async () => {
+    const dto = { limit: 4 };
+
+    await controller.reviewRepository(
+      request,
+      'workspace-id',
+      'repository-id',
+      dto,
+    );
+
+    expect(repositoriesService.reviewRepository).toHaveBeenCalledWith(
       'user-id',
       'workspace-id',
       'repository-id',

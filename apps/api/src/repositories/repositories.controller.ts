@@ -14,6 +14,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateRepositoryDto } from './dto/create-repository.dto';
 import { ImportRepositoryDto } from './dto/import-repository.dto';
+import { ReviewRepositoryDto } from './dto/review-repository.dto';
 import { SearchRepositoryDto } from './dto/search-repository.dto';
 import { RepositoriesService } from './repositories.service';
 
@@ -173,6 +174,38 @@ export class RepositoriesController {
       workspaceId,
       repositoryId,
       searchRepositoryDto,
+    );
+  }
+
+  @Get(':repositoryId/reviews')
+  findReviews(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+  ) {
+    return this.repositoriesService.findReviews(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+    );
+  }
+
+  @Post(':repositoryId/review')
+  reviewRepository(
+    @Req() request: AuthenticatedRequest,
+    @Param('workspaceId', new ParseUUIDPipe({ version: '4' }))
+    workspaceId: string,
+    @Param('repositoryId', new ParseUUIDPipe({ version: '4' }))
+    repositoryId: string,
+    @Body() reviewRepositoryDto: ReviewRepositoryDto,
+  ) {
+    return this.repositoriesService.reviewRepository(
+      request.user.userId,
+      workspaceId,
+      repositoryId,
+      reviewRepositoryDto,
     );
   }
 

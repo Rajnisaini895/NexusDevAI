@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -49,6 +50,15 @@ describe('RepositoriesService', () => {
       findMany: jest.fn(),
       update: jest.fn(),
     },
+    repositoryCodeReview: {
+      createMany: jest.fn(),
+      deleteMany: jest.fn(),
+      findMany: jest.fn(),
+    },
+    repositoryCodeReviewRun: {
+      create: jest.fn(),
+      findFirst: jest.fn(),
+    },
     providerConnection: {
       findFirst: jest.fn(),
     },
@@ -71,6 +81,7 @@ describe('RepositoriesService', () => {
   const ollamaGenerationService = {
     model: 'qwen2.5-coder:3b',
     answer: jest.fn(),
+    reviewCode: jest.fn(),
   };
 
   const repository = {
@@ -105,6 +116,11 @@ describe('RepositoriesService', () => {
     prisma.repositoryChunk.createMany.mockResolvedValue({ count: 0 });
     prisma.repositoryChunk.count.mockResolvedValue(0);
     prisma.repositoryChunk.update.mockResolvedValue({});
+    prisma.repositoryCodeReview.createMany.mockResolvedValue({ count: 0 });
+    prisma.repositoryCodeReview.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.repositoryCodeReview.findMany.mockResolvedValue([]);
+    prisma.repositoryCodeReviewRun.create.mockResolvedValue({});
+    prisma.repositoryCodeReviewRun.findFirst.mockResolvedValue(null);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -416,6 +432,145 @@ describe('RepositoriesService', () => {
         }),
       ],
     });
+  });
+
+  it('reviews prioritized embedded chunks and replaces saved findings', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    prisma.repositoryChunk.findMany.mockResolvedValue([
+      {
+        startLine: 1,
+        endLine: 20,
+        content: 'describe("helper", () => {});',
+        file: { path: 'src/helper.spec.ts' },
+      },
+      {
+        startLine: 10,
+        endLine: 40,
+        content: 'const token = request.headers.authorization;',
+        file: { path: 'src/auth.service.ts' },
+      },
+    ]);
+    ollamaGenerationService.reviewCode.mockResolvedValue({
+      model: 'qwen2.5-coder:3b',
+      reviews: [
+        {
+          title: 'Missing authorization validation',
+          description: 'The token is read but never validated.',
+          severity: 'HIGH',
+          filePath: 'src/auth.service.ts',
+          startLine: 10,
+          endLine: 10,
+          suggestion: 'Validate the token before using it.',
+        },
+      ],
+    });
+    const savedReview = {
+      id: 'review-id',
+      repositoryId: 'repository-id',
+      title: 'Missing authorization validation',
+      severity: 'HIGH',
+    };
+    prisma.repositoryCodeReview.findMany.mockResolvedValue([savedReview]);
+
+    await expect(
+      service.reviewRepository('user-id', 'workspace-id', 'repository-id', {
+        limit: 1,
+      }),
+    ).resolves.toEqual({
+      message: 'Repository review completed',
+      model: 'qwen2.5-coder:3b',
+      reviewed: { chunks: 1, issues: 1 },
+      reviews: [savedReview],
+    });
+
+    expect(ollamaGenerationService.reviewCode).toHaveBeenCalledWith([
+      expect.objectContaining({ path: 'src/auth.service.ts' }),
+    ]);
+    expect(prisma.repositoryCodeReview.deleteMany).toHaveBeenCalledWith({
+      where: { repositoryId: 'repository-id' },
+    });
+    expect(prisma.repositoryCodeReview.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          repositoryId: 'repository-id',
+          severity: 'HIGH',
+        }),
+      ],
+    });
+    expect(prisma.repositoryCodeReviewRun.create).toHaveBeenCalledWith({
+      data: {
+        repositoryId: 'repository-id',
+        model: 'qwen2.5-coder:3b',
+        chunksReviewed: 1,
+        issuesFound: 1,
+      },
+    });
+  });
+
+  it('returns the latest successful review run when no findings were saved', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    const latestRun = {
+      id: 'run-id',
+      repositoryId: 'repository-id',
+      model: 'qwen2.5-coder:7b',
+      chunksReviewed: 4,
+      issuesFound: 0,
+      createdAt: new Date('2026-07-12T11:00:00.000Z'),
+    };
+    prisma.repositoryCodeReviewRun.findFirst.mockResolvedValue(latestRun);
+
+    await expect(
+      service.findReviews('user-id', 'workspace-id', 'repository-id'),
+    ).resolves.toEqual({ reviews: [], latestRun });
+    expect(prisma.repositoryCodeReviewRun.findFirst).toHaveBeenCalledWith({
+      where: { repositoryId: 'repository-id' },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  it('does not delete saved findings when review generation fails', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    prisma.repositoryChunk.findMany.mockResolvedValue([
+      {
+        startLine: 1,
+        endLine: 10,
+        content: 'throw new Error("failed");',
+        file: { path: 'src/service.ts' },
+      },
+    ]);
+    ollamaGenerationService.reviewCode.mockRejectedValue(
+      new Error('Ollama unavailable'),
+    );
+
+    await expect(
+      service.reviewRepository('user-id', 'workspace-id', 'repository-id', {
+        limit: 4,
+      }),
+    ).rejects.toThrow('Ollama unavailable');
+    expect(prisma.repositoryCodeReview.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('requires embedded chunks before running a review', async () => {
+    prisma.repository.findFirst.mockResolvedValue({ id: 'repository-id' });
+    prisma.repositoryChunk.findMany.mockResolvedValue([]);
+
+    await expect(
+      service.reviewRepository('user-id', 'workspace-id', 'repository-id', {
+        limit: 4,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(ollamaGenerationService.reviewCode).not.toHaveBeenCalled();
+  });
+
+  it('prevents a viewer from running a repository review', async () => {
+    prisma.membership.findFirst.mockResolvedValue({ role: MemberRole.VIEWER });
+
+    await expect(
+      service.reviewRepository('user-id', 'workspace-id', 'repository-id', {
+        limit: 4,
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.repositoryChunk.findMany).not.toHaveBeenCalled();
   });
 
   it('allows a developer to add a repository to an authorized workspace', async () => {

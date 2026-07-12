@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CodeReviewPanel } from "./code-review-panel";
 
 interface Organization {
   id: string;
@@ -657,6 +658,13 @@ export function DashboardClient() {
                       </div>
                     )}
                   </div>
+                  {data.selectedWorkspaceId && (
+                    <CodeReviewPanel
+                      repositoryId={repository.id}
+                      workspaceId={data.selectedWorkspaceId}
+                      chunkCount={repository._count.chunks}
+                    />
+                  )}
                 </article>
               ))}
             </div>

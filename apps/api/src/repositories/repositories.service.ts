@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   BadGatewayException,
   ConflictException,
   ForbiddenException,
@@ -17,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { GithubAppService } from '../provider-connections/github-app.service';
 import { CreateRepositoryDto } from './dto/create-repository.dto';
 import { ImportRepositoryDto } from './dto/import-repository.dto';
+import { ReviewRepositoryDto } from './dto/review-repository.dto';
 import { SearchRepositoryDto } from './dto/search-repository.dto';
 import { EmbeddingsService } from './embeddings.service';
 import { OllamaGenerationService } from './ollama-generation.service';
@@ -579,6 +581,103 @@ export class RepositoriesService {
     };
   }
 
+  async findReviews(userId: string, workspaceId: string, repositoryId: string) {
+    await this.findWorkspaceMembership(userId, workspaceId);
+    await this.requireRepository(workspaceId, repositoryId);
+
+    const [reviews, latestRun] = await Promise.all([
+      this.prisma.repositoryCodeReview.findMany({
+        where: { repositoryId },
+        orderBy: [{ createdAt: 'desc' }, { severity: 'desc' }],
+      }),
+      this.prisma.repositoryCodeReviewRun.findFirst({
+        where: { repositoryId },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    return { reviews, latestRun };
+  }
+
+  async reviewRepository(
+    userId: string,
+    workspaceId: string,
+    repositoryId: string,
+    reviewRepositoryDto: ReviewRepositoryDto,
+  ) {
+    const membership = await this.findWorkspaceMembership(userId, workspaceId);
+    if (membership.role === MemberRole.VIEWER) {
+      throw new ForbiddenException('Viewers cannot run repository reviews');
+    }
+    await this.requireRepository(workspaceId, repositoryId);
+
+    const candidateChunks = await this.prisma.repositoryChunk.findMany({
+      where: {
+        repositoryId,
+        embedding: { isEmpty: false },
+      },
+      select: {
+        startLine: true,
+        endLine: true,
+        content: true,
+        file: { select: { path: true } },
+      },
+      take: Math.max(reviewRepositoryDto.limit * 8, 24),
+    });
+    const sources = candidateChunks
+      .sort((left, right) => {
+        const difference =
+          this.reviewPriority(right.file.path, right.content) -
+          this.reviewPriority(left.file.path, left.content);
+        return difference || left.file.path.localeCompare(right.file.path);
+      })
+      .slice(0, reviewRepositoryDto.limit)
+      .map(({ file, ...chunk }) => ({ path: file.path, ...chunk }));
+
+    if (sources.length === 0) {
+      throw new BadRequestException(
+        'Create repository chunks and embeddings before running a review',
+      );
+    }
+
+    const generated = await this.ollamaGenerationService.reviewCode(sources);
+    await this.prisma.$transaction([
+      this.prisma.repositoryCodeReview.deleteMany({
+        where: { repositoryId },
+      }),
+      ...(generated.reviews.length
+        ? [
+            this.prisma.repositoryCodeReview.createMany({
+              data: generated.reviews.map((review) => ({
+                repositoryId,
+                ...review,
+                severity: review.severity,
+              })),
+            }),
+          ]
+        : []),
+      this.prisma.repositoryCodeReviewRun.create({
+        data: {
+          repositoryId,
+          model: generated.model,
+          chunksReviewed: sources.length,
+          issuesFound: generated.reviews.length,
+        },
+      }),
+    ]);
+    const reviews = await this.prisma.repositoryCodeReview.findMany({
+      where: { repositoryId },
+      orderBy: [{ createdAt: 'desc' }, { severity: 'desc' }],
+    });
+
+    return {
+      message: 'Repository review completed',
+      model: generated.model,
+      reviewed: { chunks: sources.length, issues: reviews.length },
+      reviews,
+    };
+  }
+
   private countEmbedded(repositoryId: string) {
     return this.prisma.repositoryChunk.count({
       where: {
@@ -587,6 +686,44 @@ export class RepositoriesService {
         embedding: { isEmpty: false },
       },
     });
+  }
+
+  private requireRepository(workspaceId: string, repositoryId: string) {
+    return this.prisma.repository
+      .findFirst({
+        where: { id: repositoryId, workspaceId },
+        select: { id: true },
+      })
+      .then((repository) => {
+        if (!repository) throw new NotFoundException('Repository not found');
+        return repository;
+      });
+  }
+
+  private reviewPriority(path: string, content: string) {
+    const normalizedPath = path.toLowerCase();
+    let score = 0;
+    if (/\.(ts|tsx|js|jsx|py|go|rs|java|cs|rb|php)$/.test(normalizedPath)) {
+      score += 3;
+    }
+    if (
+      /(auth|security|session|token|permission|controller|service)/.test(
+        normalizedPath,
+      )
+    ) {
+      score += 5;
+    }
+    if (/(test|spec|fixture|mock|generated|migration)/.test(normalizedPath)) {
+      score -= 5;
+    }
+    if (
+      /(password|token|authorization|transaction|delete|update|fetch|crypto|catch|throw)/i.test(
+        content,
+      )
+    ) {
+      score += 3;
+    }
+    return score;
   }
 
   private cosineSimilarity(left: number[], right: number[]) {
