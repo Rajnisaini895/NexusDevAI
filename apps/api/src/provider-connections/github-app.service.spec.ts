@@ -161,4 +161,95 @@ describe('GithubAppService', () => {
 
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it('builds bounded review sources around added pull request lines', async () => {
+    jest
+      .spyOn(service as never, 'createInstallationToken' as never)
+      .mockResolvedValue({ token: 'installation-token' } as never);
+    const request = jest.spyOn(service as never, 'request' as never);
+    const source = Array.from(
+      { length: 80 },
+      (_, index) => `export const line${index + 1} = ${index + 1};`,
+    ).join('\n');
+    request
+      .mockResolvedValueOnce([
+        {
+          sha: 'blob-sha',
+          filename: 'src/main.ts',
+          status: 'modified',
+          additions: 2,
+          deletions: 1,
+          changes: 3,
+          patch:
+            '@@ -39,3 +39,4 @@\n export const line39 = 39;\n-export const line40 = 0;\n+export const line40 = 40;\n+export const line41 = 41;\n export const line42 = 42;',
+        },
+        {
+          sha: 'secret-sha',
+          filename: '.env',
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+          changes: 1,
+          patch: '@@ -1 +1 @@\n+TOKEN=secret',
+        },
+      ] as never)
+      .mockResolvedValueOnce({
+        content: Buffer.from(source).toString('base64'),
+        encoding: 'base64',
+        size: Buffer.byteLength(source),
+      } as never);
+
+    const result = await service.getPullRequestSources(
+      '98765',
+      'acme/project',
+      12,
+    );
+
+    expect(result.changedFiles).toBe(2);
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0]).toMatchObject({
+      path: 'src/main.ts',
+      startLine: 20,
+      endLine: 61,
+    });
+    expect(result.sources[0].content).toContain('export const line40 = 40;');
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('posts a commit-scoped pull request review comment', async () => {
+    jest
+      .spyOn(service as never, 'createInstallationToken' as never)
+      .mockResolvedValue({ token: 'installation-token' } as never);
+    const request = jest
+      .spyOn(service as never, 'request' as never)
+      .mockResolvedValue({
+        id: 42,
+        html_url: 'https://github.com/acme/project/pull/12#review-42',
+      } as never);
+
+    await expect(
+      service.createPullRequestReview(
+        '98765',
+        'acme/project',
+        12,
+        'head-sha',
+        'No defects found.',
+      ),
+    ).resolves.toEqual({
+      id: '42',
+      url: 'https://github.com/acme/project/pull/12#review-42',
+    });
+    expect(request).toHaveBeenCalledWith(
+      '/repos/acme/project/pulls/12/reviews',
+      'installation-token',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          commit_id: 'head-sha',
+          body: 'No defects found.',
+          event: 'COMMENT',
+        }),
+      }),
+    );
+  });
 });

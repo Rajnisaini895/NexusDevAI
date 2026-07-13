@@ -71,6 +71,21 @@ interface GithubBlob {
   size: number;
 }
 
+interface GithubPullRequestFile {
+  sha: string;
+  filename: string;
+  status: 'added' | 'modified' | 'removed' | 'renamed' | 'changed' | 'copied';
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+}
+
+interface GithubPullRequestReview {
+  id: number;
+  html_url: string;
+}
+
 interface SetupState {
   organizationId: string;
   userId: string;
@@ -284,6 +299,93 @@ export class GithubAppService {
     };
   }
 
+  async getPullRequestSources(
+    installationId: string,
+    fullName: string,
+    pullRequestNumber: number,
+  ) {
+    const installationToken =
+      await this.createInstallationToken(installationId);
+    const repositoryPath = this.encodeRepositoryPath(fullName);
+    const changedFiles = await this.request<GithubPullRequestFile[]>(
+      `/repos/${repositoryPath}/pulls/${pullRequestNumber}/files?per_page=100`,
+      installationToken.token,
+    );
+    const candidates = changedFiles
+      .filter(
+        (file) =>
+          file.status !== 'removed' &&
+          Boolean(file.patch) &&
+          this.isSupportedSourceFile(file.filename),
+      )
+      .sort((left, right) => right.changes - left.changes)
+      .slice(0, 12);
+    const sources: Array<{
+      path: string;
+      startLine: number;
+      endLine: number;
+      content: string;
+    }> = [];
+
+    for (const file of candidates) {
+      const blob = await this.request<GithubBlob>(
+        `/repos/${repositoryPath}/git/blobs/${file.sha}`,
+        installationToken.token,
+      );
+      if (blob.encoding !== 'base64' || blob.size > this.maxFileSize) continue;
+      const content = Buffer.from(
+        blob.content.replace(/\s/g, ''),
+        'base64',
+      ).toString('utf8');
+      if (content.includes('\u0000')) continue;
+
+      const lines = content.split(/\r?\n/);
+      const changedLines = this.parseAddedLines(file.patch ?? '');
+      if (changedLines.length === 0) continue;
+      const firstChangedLine = changedLines[0];
+      const lastChangedLine = changedLines.at(-1) ?? firstChangedLine;
+      const startLine = Math.max(1, firstChangedLine - 20);
+      const endLine = Math.min(
+        lines.length,
+        Math.min(lastChangedLine + 20, startLine + 119),
+      );
+      sources.push({
+        path: file.filename,
+        startLine,
+        endLine,
+        content: lines.slice(startLine - 1, endLine).join('\n'),
+      });
+    }
+
+    return {
+      sources: sources.slice(0, 8),
+      changedFiles: changedFiles.length,
+      eligibleFiles: candidates.length,
+    };
+  }
+
+  async createPullRequestReview(
+    installationId: string,
+    fullName: string,
+    pullRequestNumber: number,
+    headSha: string,
+    body: string,
+  ) {
+    const installationToken =
+      await this.createInstallationToken(installationId);
+    const repositoryPath = this.encodeRepositoryPath(fullName);
+    const review = await this.request<GithubPullRequestReview>(
+      `/repos/${repositoryPath}/pulls/${pullRequestNumber}/reviews`,
+      installationToken.token,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commit_id: headSha, body, event: 'COMMENT' }),
+      },
+    );
+    return { id: String(review.id), url: review.html_url };
+  }
+
   private isSupportedSourceFile(path: string) {
     const normalized = path.toLowerCase();
     const segments = normalized.split('/');
@@ -373,6 +475,35 @@ export class GithubAppService {
       xml: 'XML',
     };
     return extension ? (languages[extension] ?? null) : null;
+  }
+
+  private parseAddedLines(patch: string) {
+    const changedLines: number[] = [];
+    let newLine = 0;
+
+    for (const line of patch.split('\n')) {
+      const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (hunk) {
+        newLine = Number(hunk[1]);
+        continue;
+      }
+      if (newLine === 0 || line.startsWith('\\ No newline')) continue;
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        changedLines.push(newLine);
+        newLine += 1;
+      } else if (!line.startsWith('-')) {
+        newLine += 1;
+      }
+    }
+
+    return changedLines;
+  }
+
+  private encodeRepositoryPath(fullName: string) {
+    return fullName
+      .split('/')
+      .map((part) => encodeURIComponent(part))
+      .join('/');
   }
 
   private createInstallationToken(installationId: string) {

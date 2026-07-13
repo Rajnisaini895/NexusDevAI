@@ -17,5 +17,6 @@ import { RepositoryProcessingService } from './repository-processing.service';
     EmbeddingsService,
     OllamaGenerationService,
   ],
+  exports: [OllamaGenerationService],
 })
 export class RepositoriesModule {}

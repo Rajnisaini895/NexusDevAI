@@ -740,6 +740,48 @@ input:focus {
   font-size: 11px;
   line-height: 1.45;
 }
+
+.pull-request-review-status {
+  grid-column: 1 / -1;
+  padding: 14px 16px;
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  border-radius: 12px;
+  background: rgba(124, 92, 255, 0.08);
+}
+
+.pull-request-review-status > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pull-request-review-status > div > div {
+  display: grid;
+  gap: 4px;
+}
+
+.pull-request-review-status span,
+.pull-request-review-status p {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.pull-request-review-status a {
+  color: var(--green);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.pull-request-review-status.completed {
+  border-color: rgba(56, 211, 159, 0.35);
+  background: rgba(56, 211, 159, 0.08);
+}
+
+.pull-request-review-status.failed {
+  border-color: rgba(255, 105, 135, 0.4);
+  background: rgba(255, 105, 135, 0.08);
+}
 .chunk-button,
 .embed-button {
   padding: 10px 14px;

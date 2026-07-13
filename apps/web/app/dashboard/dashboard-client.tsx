@@ -26,6 +26,7 @@ interface Repository {
   url: string | null;
   isPrivate: boolean | null;
   processingRuns: ProcessingRun[];
+  pullRequestReviewRuns: PullRequestReviewRun[];
   _count: { branches: number; commits: number; files: number; chunks: number };
 }
 
@@ -55,6 +56,39 @@ interface ProcessingRun {
 interface ProcessingResponse {
   message?: string;
   run?: ProcessingRun | null;
+}
+
+type PullRequestReviewStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "SKIPPED";
+
+interface PullRequestReviewRun {
+  id: string;
+  repositoryId: string;
+  headSha: string;
+  status: PullRequestReviewStatus;
+  model: string | null;
+  filesReviewed: number;
+  issuesFound: number;
+  errorMessage: string | null;
+  githubReviewUrl: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  pullRequest: {
+    number: number;
+    title: string;
+    url: string;
+    authorLogin: string | null;
+  };
+}
+
+interface PullRequestReviewResponse {
+  run?: PullRequestReviewRun | null;
 }
 
 interface Connection {
@@ -175,6 +209,10 @@ function isProcessingActive(run: ProcessingRun) {
   return run.status === "QUEUED" || run.status === "RUNNING";
 }
 
+function isPullRequestReviewActive(run: PullRequestReviewRun) {
+  return run.status === "QUEUED" || run.status === "RUNNING";
+}
+
 export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
   const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -210,6 +248,9 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
   const [processingRuns, setProcessingRuns] = useState<
     Record<string, ProcessingRun>
   >({});
+  const [pullRequestReviewRuns, setPullRequestReviewRuns] = useState<
+    Record<string, PullRequestReviewRun>
+  >({});
 
   const loadDashboard = useCallback(
     async (organizationId?: string, workspaceId?: string) => {
@@ -240,6 +281,14 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
           Object.fromEntries(
             result.repositories.flatMap((repository) => {
               const run = repository.processingRuns[0];
+              return run ? [[repository.id, run]] : [];
+            }),
+          ),
+        );
+        setPullRequestReviewRuns(
+          Object.fromEntries(
+            result.repositories.flatMap((repository) => {
+              const run = repository.pullRequestReviewRuns[0];
               return run ? [[repository.id, run]] : [];
             }),
           ),
@@ -320,6 +369,60 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
       window.clearInterval(interval);
     };
   }, [activeProcessingKey, data, loadDashboard, router]);
+
+  const activePullRequestReviewKey = Object.entries(pullRequestReviewRuns)
+    .filter(([, run]) => isPullRequestReviewActive(run))
+    .map(([repositoryId]) => repositoryId)
+    .sort()
+    .join(",");
+
+  useEffect(() => {
+    const workspaceId = data?.selectedWorkspaceId;
+    if (!activePullRequestReviewKey || !workspaceId) return;
+    const repositoryIds = activePullRequestReviewKey.split(",");
+    let cancelled = false;
+
+    async function refreshPullRequestReviews() {
+      const updates = await Promise.all(
+        repositoryIds.map(async (repositoryId) => {
+          const query = new URLSearchParams({ workspaceId: workspaceId! });
+          const response = await fetch(
+            `/api/repositories/${repositoryId}/pull-request-reviews?${query.toString()}`,
+            { cache: "no-store" },
+          );
+          if (response.status === 401) {
+            router.replace("/");
+            router.refresh();
+            return null;
+          }
+          if (!response.ok) return null;
+          const result = (await response.json()) as PullRequestReviewResponse;
+          return result.run ? ([repositoryId, result.run] as const) : null;
+        }),
+      );
+      if (cancelled) return;
+      const validUpdates = updates.filter(
+        (update): update is readonly [string, PullRequestReviewRun] =>
+          update !== null,
+      );
+      if (validUpdates.length) {
+        setPullRequestReviewRuns((current) => ({
+          ...current,
+          ...Object.fromEntries(validUpdates),
+        }));
+      }
+    }
+
+    void refreshPullRequestReviews();
+    const interval = window.setInterval(
+      () => void refreshPullRequestReviews(),
+      2000,
+    );
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activePullRequestReviewKey, data?.selectedWorkspaceId, router]);
 
   async function synchronize(repository: Repository) {
     if (!data?.selectedWorkspaceId) return;
@@ -900,6 +1003,9 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
                   processingRuns[repository.id] ?? repository.processingRuns[0];
                 const processingActive =
                   processingRun && isProcessingActive(processingRun);
+                const pullRequestReviewRun =
+                  pullRequestReviewRuns[repository.id] ??
+                  repository.pullRequestReviewRuns[0];
 
                 return (
                   <article className="repository-row" key={repository.id}>
@@ -1032,6 +1138,47 @@ export function DashboardClient({ githubStatus }: { githubStatus?: string }) {
                         </div>
                         {processingRun.errorMessage && (
                           <p>{processingRun.errorMessage}</p>
+                        )}
+                      </div>
+                    )}
+                    {pullRequestReviewRun && (
+                      <div
+                        className={`pull-request-review-status ${pullRequestReviewRun.status.toLowerCase()}`}
+                        role="status"
+                      >
+                        <div>
+                          <div>
+                            <strong>
+                              PR #{pullRequestReviewRun.pullRequest.number}:{" "}
+                              {pullRequestReviewRun.pullRequest.title}
+                            </strong>
+                            <span>
+                              {pullRequestReviewRun.status === "QUEUED"
+                                ? "Waiting for local reviewer"
+                                : pullRequestReviewRun.status === "RUNNING"
+                                  ? "Reviewing changed code with Ollama"
+                                  : pullRequestReviewRun.status === "COMPLETED"
+                                    ? `${pullRequestReviewRun.issuesFound} validated issue${pullRequestReviewRun.issuesFound === 1 ? "" : "s"} in ${pullRequestReviewRun.filesReviewed} files`
+                                    : pullRequestReviewRun.status === "SKIPPED"
+                                      ? "Superseded by a newer commit"
+                                      : "Automatic review failed"}
+                            </span>
+                          </div>
+                          <a
+                            href={
+                              pullRequestReviewRun.githubReviewUrl ??
+                              pullRequestReviewRun.pullRequest.url
+                            }
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {pullRequestReviewRun.githubReviewUrl
+                              ? "View GitHub review"
+                              : "View pull request"}
+                          </a>
+                        </div>
+                        {pullRequestReviewRun.errorMessage && (
+                          <p>{pullRequestReviewRun.errorMessage}</p>
                         )}
                       </div>
                     )}

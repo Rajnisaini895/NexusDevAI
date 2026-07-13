@@ -828,6 +828,33 @@ export class RepositoriesService {
       orderBy: { createdAt: 'desc' },
       take: 1,
     },
+    pullRequestReviewRuns: {
+      select: {
+        id: true,
+        repositoryId: true,
+        headSha: true,
+        status: true,
+        model: true,
+        filesReviewed: true,
+        issuesFound: true,
+        errorMessage: true,
+        githubReviewUrl: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        pullRequest: {
+          select: {
+            number: true,
+            title: true,
+            url: true,
+            authorLogin: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    },
     _count: {
       select: { branches: true, commits: true, files: true, chunks: true },
     },

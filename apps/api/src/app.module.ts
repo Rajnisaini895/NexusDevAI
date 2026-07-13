@@ -10,6 +10,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
 import { RepositoriesModule } from './repositories/repositories.module';
+import { GithubWebhooksModule } from './github-webhooks/github-webhooks.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { RepositoriesModule } from './repositories/repositories.module';
     WorkspacesModule,
     RepositoriesModule,
     ProviderConnectionsModule,
+    GithubWebhooksModule,
   ],
   controllers: [AppController],
   providers: [AppService],

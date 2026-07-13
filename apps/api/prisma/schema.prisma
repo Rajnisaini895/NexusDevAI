@@ -56,6 +56,19 @@ enum RepositoryProcessingStage {
   FAILED
 }
 
+enum GitHubPullRequestState {
+  OPEN
+  CLOSED
+}
+
+enum PullRequestReviewStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
 model User {
   id           String     @id @default(uuid())
   email        String     @unique
@@ -118,13 +131,15 @@ model Repository {
   workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   providerConnection ProviderConnection? @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
 
-  branches       RepositoryBranch[]
-  commits        RepositoryCommit[]
-  files          RepositoryFile[]
-  chunks         RepositoryChunk[]
-  reviews        RepositoryCodeReview[]
-  reviewRuns     RepositoryCodeReviewRun[]
-  processingRuns RepositoryProcessingRun[]
+  branches              RepositoryBranch[]
+  commits               RepositoryCommit[]
+  files                 RepositoryFile[]
+  chunks                RepositoryChunk[]
+  reviews               RepositoryCodeReview[]
+  reviewRuns            RepositoryCodeReviewRun[]
+  processingRuns        RepositoryProcessingRun[]
+  pullRequests          GitHubPullRequest[]
+  pullRequestReviewRuns PullRequestReviewRun[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -132,6 +147,55 @@ model Repository {
   @@unique([workspaceId, fullName])
   @@index([workspaceId])
   @@index([providerConnectionId])
+}
+
+model GitHubPullRequest {
+  id           String                 @id @default(uuid())
+  repositoryId String
+  number       Int
+  title        String
+  url          String
+  authorLogin  String?
+  baseSha      String
+  headSha      String
+  state        GitHubPullRequestState @default(OPEN)
+
+  repository Repository             @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  reviewRuns PullRequestReviewRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([repositoryId, number])
+  @@index([repositoryId, state])
+}
+
+model PullRequestReviewRun {
+  id              String                  @id @default(uuid())
+  repositoryId    String
+  pullRequestId   String
+  deliveryId      String
+  headSha         String
+  status          PullRequestReviewStatus @default(QUEUED)
+  model           String?
+  filesReviewed   Int                     @default(0)
+  issuesFound     Int                     @default(0)
+  errorMessage    String?                 @db.Text
+  githubReviewId  String?
+  githubReviewUrl String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  repository  Repository        @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  pullRequest GitHubPullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([pullRequestId, headSha])
+  @@unique([repositoryId, deliveryId])
+  @@index([repositoryId, createdAt])
+  @@index([status, createdAt])
 }
 
 model RepositoryProcessingRun {
