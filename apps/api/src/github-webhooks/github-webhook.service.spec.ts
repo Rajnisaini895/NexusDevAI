@@ -30,6 +30,8 @@ describe('GithubWebhookService', () => {
   const githubAppService = {
     getPullRequestSources: jest.fn(),
     createPullRequestReview: jest.fn(),
+    createPullRequestCheckRun: jest.fn(),
+    completePullRequestCheckRun: jest.fn(),
   };
   const ollamaGenerationService = { reviewCode: jest.fn() };
   const queue = { add: jest.fn() };
@@ -84,6 +86,14 @@ describe('GithubWebhookService', () => {
     prisma.pullRequestReviewRun.create.mockResolvedValue({ id: 'run-id' });
     prisma.pullRequestReviewRun.update.mockResolvedValue({ id: 'run-id' });
     queue.add.mockResolvedValue({ id: 'run-id' });
+    githubAppService.createPullRequestCheckRun.mockResolvedValue({
+      id: 'check-21',
+      url: 'https://github.com/acme/project/runs/21',
+    });
+    githubAppService.completePullRequestCheckRun.mockResolvedValue({
+      id: 'check-21',
+      url: 'https://github.com/acme/project/runs/21',
+    });
   });
 
   it('accepts a valid SHA-256 GitHub signature', () => {
@@ -157,6 +167,7 @@ describe('GithubWebhookService', () => {
       pullRequest: {
         number: 12,
         headSha: 'head-sha',
+        url: 'https://github.com/acme/project/pull/12',
       },
       repository: {
         fullName: 'acme/project',
@@ -196,12 +207,26 @@ describe('GithubWebhookService', () => {
 
     await service.processRun('run-id');
 
+    expect(githubAppService.createPullRequestCheckRun).toHaveBeenCalledWith(
+      '98765',
+      'acme/project',
+      'head-sha',
+      'https://github.com/acme/project/pull/12',
+    );
     expect(githubAppService.createPullRequestReview).toHaveBeenCalledWith(
       '98765',
       'acme/project',
       12,
       'head-sha',
       expect.stringContaining('[HIGH] Refresh token is reused'),
+    );
+    expect(githubAppService.completePullRequestCheckRun).toHaveBeenCalledWith(
+      '98765',
+      'acme/project',
+      'check-21',
+      'neutral',
+      '1 validated issue found',
+      expect.stringContaining('View full review'),
     );
     const updateMock = prisma.pullRequestReviewRun
       .update as jest.MockedFunction<
@@ -216,6 +241,51 @@ describe('GithubWebhookService', () => {
         filesReviewed: 1,
         issuesFound: 1,
         githubReviewId: '42',
+        githubCheckRunId: 'check-21',
+        githubCheckRunUrl: 'https://github.com/acme/project/runs/21',
+      },
+    });
+  });
+
+  it('completes the GitHub check as failed when review processing fails', async () => {
+    prisma.pullRequestReviewRun.findUnique.mockResolvedValue({
+      id: 'run-id',
+      headSha: 'head-sha',
+      pullRequest: {
+        number: 12,
+        headSha: 'head-sha',
+        url: 'https://github.com/acme/project/pull/12',
+      },
+      repository: {
+        fullName: 'acme/project',
+        providerConnection: { installationId: '98765', status: 'ACTIVE' },
+      },
+    });
+    githubAppService.getPullRequestSources.mockRejectedValue(
+      new Error('GitHub changed files unavailable'),
+    );
+
+    await expect(service.processRun('run-id')).rejects.toThrow(
+      'GitHub changed files unavailable',
+    );
+
+    expect(githubAppService.completePullRequestCheckRun).toHaveBeenCalledWith(
+      '98765',
+      'acme/project',
+      'check-21',
+      'failure',
+      'NexusDevAI review failed',
+      'GitHub changed files unavailable',
+    );
+    const updateMock = prisma.pullRequestReviewRun
+      .update as jest.MockedFunction<
+      (args: ReviewUpdateArgs) => Promise<unknown>
+    >;
+    expect(updateMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      where: { id: 'run-id' },
+      data: {
+        status: PullRequestReviewStatus.FAILED,
+        errorMessage: 'GitHub changed files unavailable',
       },
     });
   });

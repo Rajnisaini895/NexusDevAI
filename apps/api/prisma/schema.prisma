@@ -171,20 +171,22 @@ model GitHubPullRequest {
 }
 
 model PullRequestReviewRun {
-  id              String                  @id @default(uuid())
-  repositoryId    String
-  pullRequestId   String
-  deliveryId      String
-  headSha         String
-  status          PullRequestReviewStatus @default(QUEUED)
-  model           String?
-  filesReviewed   Int                     @default(0)
-  issuesFound     Int                     @default(0)
-  errorMessage    String?                 @db.Text
-  githubReviewId  String?
-  githubReviewUrl String?
-  startedAt       DateTime?
-  completedAt     DateTime?
+  id                String                  @id @default(uuid())
+  repositoryId      String
+  pullRequestId     String
+  deliveryId        String
+  headSha           String
+  status            PullRequestReviewStatus @default(QUEUED)
+  model             String?
+  filesReviewed     Int                     @default(0)
+  issuesFound       Int                     @default(0)
+  errorMessage      String?                 @db.Text
+  githubReviewId    String?
+  githubReviewUrl   String?
+  githubCheckRunId  String?
+  githubCheckRunUrl String?
+  startedAt         DateTime?
+  completedAt       DateTime?
 
   repository  Repository        @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   pullRequest GitHubPullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)

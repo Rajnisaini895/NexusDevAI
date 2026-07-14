@@ -86,6 +86,13 @@ interface GithubPullRequestReview {
   html_url: string;
 }
 
+interface GithubCheckRun {
+  id: number;
+  html_url: string;
+}
+
+export type GithubCheckConclusion = 'success' | 'neutral' | 'failure';
+
 interface SetupState {
   organizationId: string;
   userId: string;
@@ -384,6 +391,65 @@ export class GithubAppService {
       },
     );
     return { id: String(review.id), url: review.html_url };
+  }
+
+  async createPullRequestCheckRun(
+    installationId: string,
+    fullName: string,
+    headSha: string,
+    detailsUrl: string,
+  ) {
+    const installationToken =
+      await this.createInstallationToken(installationId);
+    const repositoryPath = this.encodeRepositoryPath(fullName);
+    const checkRun = await this.request<GithubCheckRun>(
+      `/repos/${repositoryPath}/check-runs`,
+      installationToken.token,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'NexusDevAI Review',
+          head_sha: headSha,
+          details_url: detailsUrl,
+          status: 'in_progress',
+          started_at: new Date().toISOString(),
+          output: {
+            title: 'Local AI review in progress',
+            summary: 'Analyzing changed source files with local Ollama.',
+          },
+        }),
+      },
+    );
+    return { id: String(checkRun.id), url: checkRun.html_url };
+  }
+
+  async completePullRequestCheckRun(
+    installationId: string,
+    fullName: string,
+    checkRunId: string,
+    conclusion: GithubCheckConclusion,
+    title: string,
+    summary: string,
+  ) {
+    const installationToken =
+      await this.createInstallationToken(installationId);
+    const repositoryPath = this.encodeRepositoryPath(fullName);
+    const checkRun = await this.request<GithubCheckRun>(
+      `/repos/${repositoryPath}/check-runs/${encodeURIComponent(checkRunId)}`,
+      installationToken.token,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'completed',
+          conclusion,
+          completed_at: new Date().toISOString(),
+          output: { title, summary },
+        }),
+      },
+    );
+    return { id: String(checkRun.id), url: checkRun.html_url };
   }
 
   private isSupportedSourceFile(path: string) {

@@ -252,4 +252,63 @@ describe('GithubAppService', () => {
       }),
     );
   });
+
+  it('creates and completes a GitHub check run for a pull request head', async () => {
+    jest
+      .spyOn(service as never, 'createInstallationToken' as never)
+      .mockResolvedValue({ token: 'installation-token' } as never);
+    const request = jest.spyOn(service as never, 'request' as never);
+    request
+      .mockResolvedValueOnce({
+        id: 21,
+        html_url: 'https://github.com/acme/project/runs/21',
+      } as never)
+      .mockResolvedValueOnce({
+        id: 21,
+        html_url: 'https://github.com/acme/project/runs/21',
+      } as never);
+
+    await expect(
+      service.createPullRequestCheckRun(
+        '98765',
+        'acme/project',
+        'head-sha',
+        'https://github.com/acme/project/pull/12',
+      ),
+    ).resolves.toEqual({
+      id: '21',
+      url: 'https://github.com/acme/project/runs/21',
+    });
+    const requestCalls = request.mock.calls as unknown as Array<
+      [string, string, RequestInit]
+    >;
+    expect(requestCalls[0]?.[0]).toBe('/repos/acme/project/check-runs');
+    expect(requestCalls[0]?.[1]).toBe('installation-token');
+    expect(requestCalls[0]?.[2].method).toBe('POST');
+    const createBody = requestCalls[0]?.[2].body;
+    if (typeof createBody !== 'string') throw new Error('Missing check body');
+    expect(createBody).toContain('"status":"in_progress"');
+
+    await expect(
+      service.completePullRequestCheckRun(
+        '98765',
+        'acme/project',
+        '21',
+        'success',
+        'No validated issues found',
+        'Reviewed one changed file.',
+      ),
+    ).resolves.toEqual({
+      id: '21',
+      url: 'https://github.com/acme/project/runs/21',
+    });
+    expect(requestCalls[1]?.[0]).toBe('/repos/acme/project/check-runs/21');
+    expect(requestCalls[1]?.[1]).toBe('installation-token');
+    expect(requestCalls[1]?.[2].method).toBe('PATCH');
+    const completeBody = requestCalls[1]?.[2].body;
+    if (typeof completeBody !== 'string') {
+      throw new Error('Missing completed check body');
+    }
+    expect(completeBody).toContain('"conclusion":"success"');
+  });
 });

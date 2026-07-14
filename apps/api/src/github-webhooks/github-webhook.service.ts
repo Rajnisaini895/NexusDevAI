@@ -17,7 +17,10 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { ConnectionOptions, Queue, Worker } from 'bullmq';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { GithubAppService } from '../provider-connections/github-app.service';
+import {
+  GithubAppService,
+  type GithubCheckConclusion,
+} from '../provider-connections/github-app.service';
 import { OllamaGenerationService } from '../repositories/ollama-generation.service';
 
 interface PullRequestPayload {
@@ -37,6 +40,12 @@ interface PullRequestPayload {
 
 interface ReviewJobData {
   runId: string;
+}
+
+interface CheckRunContext {
+  installationId: string;
+  repositoryFullName: string;
+  checkRunId: string;
 }
 
 type ReviewQueue = Queue<ReviewJobData, void, 'review-pull-request'>;
@@ -253,6 +262,7 @@ export class GithubWebhookService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
+    let checkRunContext: CheckRunContext | undefined;
     try {
       const run = await this.prisma.pullRequestReviewRun.findUnique({
         where: { id: runId },
@@ -288,6 +298,25 @@ export class GithubWebhookService implements OnModuleInit, OnModuleDestroy {
         });
       }
 
+      const checkRun = await this.githubAppService.createPullRequestCheckRun(
+        installationId,
+        run.repository.fullName,
+        run.headSha,
+        run.pullRequest.url,
+      );
+      checkRunContext = {
+        installationId,
+        repositoryFullName: run.repository.fullName,
+        checkRunId: checkRun.id,
+      };
+      await this.prisma.pullRequestReviewRun.update({
+        where: { id: runId },
+        data: {
+          githubCheckRunId: checkRun.id,
+          githubCheckRunUrl: checkRun.url,
+        },
+      });
+
       const changed = await this.githubAppService.getPullRequestSources(
         installationId,
         run.repository.fullName,
@@ -309,6 +338,25 @@ export class GithubWebhookService implements OnModuleInit, OnModuleDestroy {
         run.headSha,
         body,
       );
+      const checkConclusion: GithubCheckConclusion = generated.reviews.length
+        ? 'neutral'
+        : 'success';
+      const completedCheck =
+        await this.githubAppService.completePullRequestCheckRun(
+          installationId,
+          run.repository.fullName,
+          checkRun.id,
+          checkConclusion,
+          generated.reviews.length
+            ? `${generated.reviews.length} validated issue${generated.reviews.length === 1 ? '' : 's'} found`
+            : 'No validated issues found',
+          this.createCheckSummary(
+            changed.sources.length,
+            changed.changedFiles,
+            generated.reviews.length,
+            posted.url,
+          ),
+        );
 
       return this.prisma.pullRequestReviewRun.update({
         where: { id: runId },
@@ -319,11 +367,29 @@ export class GithubWebhookService implements OnModuleInit, OnModuleDestroy {
           issuesFound: generated.reviews.length,
           githubReviewId: posted.id,
           githubReviewUrl: posted.url,
+          githubCheckRunId: completedCheck.id,
+          githubCheckRunUrl: completedCheck.url,
           errorMessage: null,
           completedAt: new Date(),
         },
       });
     } catch (error: unknown) {
+      if (checkRunContext) {
+        try {
+          await this.githubAppService.completePullRequestCheckRun(
+            checkRunContext.installationId,
+            checkRunContext.repositoryFullName,
+            checkRunContext.checkRunId,
+            'failure',
+            'NexusDevAI review failed',
+            this.errorMessage(error),
+          );
+        } catch (checkError: unknown) {
+          this.logger.error(
+            `Unable to complete failed GitHub check: ${this.errorMessage(checkError)}`,
+          );
+        }
+      }
       await this.failRun(runId, error);
       throw error;
     }
@@ -406,14 +472,33 @@ export class GithubWebhookService implements OnModuleInit, OnModuleDestroy {
       .slice(0, 4000);
   }
 
+  private createCheckSummary(
+    filesReviewed: number,
+    changedFiles: number,
+    issuesFound: number,
+    reviewUrl: string,
+  ) {
+    if (filesReviewed === 0) {
+      return `No supported changed source regions were available in ${changedFiles} changed files. [View pull request review](${reviewUrl}).`;
+    }
+    const issueSummary = issuesFound
+      ? `${issuesFound} validated issue${issuesFound === 1 ? '' : 's'} found.`
+      : 'No concrete correctness, security, or serious performance defects were found.';
+    return `Reviewed ${filesReviewed} of ${changedFiles} changed files. ${issueSummary} [View full review](${reviewUrl}).`;
+  }
+
+  private errorMessage(error: unknown) {
+    return (
+      error instanceof Error ? error.message : 'Pull request review failed'
+    ).slice(0, 2000);
+  }
+
   private failRun(runId: string, error: unknown) {
-    const message =
-      error instanceof Error ? error.message : 'Pull request review failed';
     return this.prisma.pullRequestReviewRun.update({
       where: { id: runId },
       data: {
         status: PullRequestReviewStatus.FAILED,
-        errorMessage: message.slice(0, 2000),
+        errorMessage: this.errorMessage(error),
         completedAt: new Date(),
       },
     });
@@ -443,6 +528,8 @@ export class GithubWebhookService implements OnModuleInit, OnModuleDestroy {
     issuesFound: true,
     errorMessage: true,
     githubReviewUrl: true,
+    githubCheckRunId: true,
+    githubCheckRunUrl: true,
     startedAt: true,
     completedAt: true,
     createdAt: true,
