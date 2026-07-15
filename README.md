@@ -40,30 +40,34 @@ NexusDevAI is a local-first developer engineering platform for importing GitHub 
 From the repository root:
 
 ```bash
+npm run setup:local
+```
+
+The setup command:
+
+- installs the locked npm dependencies;
+- creates missing local environment files without overwriting existing ones;
+- starts PostgreSQL and Redis;
+- generates Prisma Client and applies migrations; and
+- installs the required Ollama embedding and generation models.
+
+If a prerequisite is missing, the command stops with a specific message. After it completes, replace the placeholder secrets and GitHub App values in `apps/api/.env`, then start the application:
+
+```bash
+npm run dev
+```
+
+For manual setup or troubleshooting, run the equivalent commands:
+
+```bash
 npm ci
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.local.example apps/web/.env.local
 npm run docker:up
-```
-
-Install the local AI models:
-
-```bash
 ollama pull embeddinggemma
 ollama pull qwen2.5-coder:7b
-```
-
-Generate Prisma Client and apply the database migrations:
-
-```bash
 npx prisma generate --schema apps/api/prisma/schema.prisma
 npx prisma migrate deploy --schema apps/api/prisma/schema.prisma
-```
-
-Fill in the GitHub App values in `apps/api/.env`, then start the application:
-
-```bash
-npm run dev
 ```
 
 Local URLs:
@@ -72,6 +76,26 @@ Local URLs:
 - API: `http://localhost:3001/api`
 - Swagger: `http://localhost:3001/api/docs`
 - Health: `http://localhost:3001/api/health`
+
+## Collaborator setup
+
+Each collaborator should clone the repository and run the local setup independently:
+
+```bash
+git clone https://github.com/Rajnisaini895/NexusDevAI.git
+cd NexusDevAI
+npm run setup:local
+```
+
+Each machine gets its own PostgreSQL data, Redis data, Ollama models, and private environment files. Never exchange `.env` files or private keys through Git.
+
+To use repository import and automatic pull request reviews, a collaborator must either create a separate development GitHub App or receive access to a deliberately shared development App through a secure channel. A separate App is recommended because a GitHub App has one configured webhook URL, while each collaborator runs a different local tunnel.
+
+After configuring `apps/api/.env`, run:
+
+```bash
+npm run dev
+```
 
 ## GitHub App setup
 

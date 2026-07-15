@@ -4,11 +4,16 @@
   "private": true,
   "description": "NexusDev AI - AI-Native Developer Engineering Platform",
   "packageManager": "npm@10.0.0",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "setup:local": "node ./scripts/setup-local.mjs",
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
