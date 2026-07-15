@@ -7,6 +7,8 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.local.example
+!.env.duckdns.example
 
 *.log
 .DS_Store

@@ -1,0 +1,9 @@
+{$NEXUSDEV_DOMAIN} {
+	@nexusdevRoutes path /api/github/webhooks /api/health
+
+	handle @nexusdevRoutes {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	respond 404
+}
